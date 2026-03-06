@@ -1,236 +1,123 @@
-# SimTimedInd — Timed Induction Saturation Simulator (Python)
+# SimTimeInd v2
 
-SimTimedInd is a **discrete-time simulation** to analyze **saturation, blocking (wait time), and throughput** when multiple preparation stations (tables) attempt to **induct items onto a lower conveyor belt that never stops**.
-
-It was built to answer a real sizing question:
-
-> The customer has **14 tables** and does not meet the target. They want to expand to **22 tables**.  
-> We need to demonstrate whether adding tables improves throughput, or if the bottleneck is the belt/spacing.
+Simulador 2D de cinta de inducción con interfaz visual en tiempo real.
 
 ---
 
-## ✅ What this project answers
+## Estructura del proyecto
 
-For a given number of stations (e.g., **14 vs 22**), the simulation helps quantify:
-
-- **Real throughput** (items/hour)
-- **Per-station blocking** (who gets stuck and for how long)
-- **Visual saturation near the end of the line** (tail view)
-- Whether adding stations helps or if the **belt + spacing is the real constraint**
-- How often operators need to **“squeeze”** (insert with reduced gap) to keep flow
-
----
-
-## System model (high level)
-
-### Items
-Two item types flow on the belt:
-
-- **Box / package** (blue)
-- **Empty tote** (orange)
-
-The belt moves at constant speed. Items occupy physical length on the belt.
-
-### Stations (tables)
-Each station has a fixed induction point on the belt.
-
-Operational behavior:
-- All stations start at the beginning of the simulation, but **not perfectly synchronized**:
-  - Each station starts at a random time in a window (e.g. 0–20s).
-- Each station repeats an infinite cycle (backlog is infinite):
-  1. Prepare an order (**35s** total)
-  2. When finished → produce **1 box** and sometimes **1 tote**
-  3. Attempt to induct pending outputs onto the belt
-     - If belt has space → induct
-     - If not → **wait** (station becomes red, HUD shows `wait=...s`)
-  4. **Only after all pending outputs are inducted** does the station start the next 35s order
-
-### Ratio (totes vs boxes)
-The intended flow ratio approximates:
-- **1500 boxes/h**
-- **1200 totes/h**
-- Tote-to-box ratio ≈ **0.8**
-
-The simulation enforces this deterministically over time (not random bursts), so long-run counts converge and boxes remain ≥ totes.
-
----
-
-## Fixed customer constraints (DO NOT change in model)
-
-These are considered fixed by the customer and should be treated as constants:
-
-### Conveyor
-- **Lower belt speed:** `22 m/min` (constant)
-- Belt never stops
-
-### Target demand (reference)
-- **Total target:** `2700 items/h`
-  - `1500 boxes/h`
-  - `1200 totes/h`
-
-### Operator timing
-- Pick tote: `5s`
-- Prepare: `25s`
-- Close: `5s`
-- **Total:** `35s` per order
-
-### Minimum nominal gap
-- **Nominal gap:** `100 mm` between items
-
-### Item lengths
-- **Tote:** `600 mm`
-- **Box:** variable length, sampled from a normal distribution:
-  - mean `366 mm`
-  - stdev `70 mm`
-  - clipped to `[200 mm, 550 mm]`
-
-> Note: The meaning of the box mean value must be consistent with your spacing assumptions.
-> If a previous calculation already embedded spacing into the “effective length”, avoid double-counting.
-
-### Layout (stations in pairs)
-Stations are arranged in pairs along the belt:
-
-- M1–M2 together, then a longer gap, then M3–M4 together, etc.
-- Distances used in code:
-  - **Within pair:** `1.15 m`
-  - **Between pairs:** `2.60 m`
-
----
-
-## “Squeeze” rule (extra operational behavior)
-
-When a station tries to induct but cannot respect the nominal gap of `100mm`:
-
-1. Try inserting with `gap=100mm`
-2. If it doesn’t fit → re-try with `gap=0mm` (no overlap, just no spacing)
-3. If it still doesn’t fit (physical collision) → station must **wait**
-
-The HUD counts how many insertions required a squeeze.
-
-This is critical for sensitivity:
-- If the simulation reaches target only with squeeze ON, it suggests real operation may frequently work with reduced spacing (or the gap assumption is not strict).
-
----
-
-## Implementation overview
-
-### Current state
-The project currently runs as a single script:
-
-- **`sim2d.py`**
-  - Python + Tkinter 2D visualization
-  - Discrete time-step simulation (DT = 0.05s)
-  - Visual belt with moving rectangles:
-    - **Blue** = box
-    - **Orange** = tote
-  - Induction posts per station
-  - Station becomes **red** when blocked and shows `wait=...s`
-  - HUD shows constants, targets, real throughput, counters (including squeeze usage)
-
-### What the visualization represents
-- The belt is a horizontal line
-- Items move to the right at constant speed
-- Each station inducts at its fixed x-position
-- Tail view shows the last part of the conveyor to observe saturation
-
----
-
-## How to run
-
-### Requirements
-- Python 3.10+ recommended
-- Tkinter installed (usually bundled on Windows Python)
-
-### Basic run (default = 22 stations, 1 hour simulation, real-time speed)
-```bash
-python sim2d.py --stations 22 --duration 3600 --speed 1.0 --view full --start_stagger 20
 ```
-aster-than-real-time (simulate 1 hour in ~minutes for demos)
-```bash
-python sim2d.py --stations 22 --duration 3600 --speed 10 --view full --start_stagger 20
+simtimeind_project/
+│
+├── main.py                        ← Punto de entrada (CLI)
+│
+└── simtimeind/                    ← Paquete principal
+    │
+    ├── core/                      ← Lógica de negocio (sin UI)
+    │   ├── constants.py           ← Todas las constantes físicas y de configuración
+    │   ├── models.py              ← Dataclasses puros (Item, Station, SimSnapshot)
+    │   ├── belt.py                ← Geometría de cinta y comprobación de gap
+    │   ├── engine.py              ← Motor de simulación (paso a paso)
+    │   └── recorder.py            ← Serialización / deserialización .sim.gz
+    │
+    ├── ui/                        ← Interfaces gráficas (tkinter)
+    │   ├── canvas_renderer.py     ← Dibuja cinta, ítems, mesas, panel KPI
+    │   ├── live_window.py         ← Ventana de simulación en vivo
+    │   └── replay_window.py       ← Ventana de reproducción con barra de tiempo
+    │
+    └── utils/
+        └── formatting.py          ← Helpers de formato de texto/color
 ```
-Compare 14 vs 22 stations
+
+### Principios SOLID aplicados
+
+| Principio | Aplicación |
+|-----------|-----------|
+| **S** – Single Responsibility | Cada módulo hace una sola cosa: `engine.py` simula, `recorder.py` guarda, `canvas_renderer.py` dibuja |
+| **O** – Open/Closed | `CanvasRenderer` se puede extender sin modificar el motor |
+| **L** – Liskov | `_FakeStation` en replay es compatible con `Station` para el renderer |
+| **I** – Interface Segregation | El motor expone `snapshot()` limpio; la UI no accede al estado interno |
+| **D** – Dependency Inversion | La UI depende de `SimSnapshot` (abstracción), no de `Engine` directamente |
+
+---
+
+## Uso
+
+### Simulación en vivo
 ```bash
-python sim2d.py --stations 14 --duration 3600 --speed 10 --view full --start_stagger 20
-python sim2d.py --stations 22 --duration 3600 --speed 10 --view full --start_stagger 20
+python main.py --stations 22 --duration 3600 --speed 1.0 --push
 ```
-View only the tail (end of line saturation)
+
+### Grabar sin UI (modo batch rápido)
 ```bash
-python sim2d.py --stations 22 --duration 3600 --speed 10 --view tail --start_stagger 20
+python main.py --stations 22 --duration 3600 --no_ui --push --record out_22.sim.gz
 ```
----
-## CLI arguments
 
-| Argument          |            Type | Default | Description                                  |
-| ----------------- | --------------: | ------: | -------------------------------------------- |
-| `--stations`      |             int |      22 | number of preparation tables                 |
-| `--duration`      |           float |    3600 | simulation duration in seconds               |
-| `--speed`         |           float |     1.0 | simulation speed multiplier (UI runs faster) |
-| `--view`          | `full` / `tail` |  `full` | full belt view or end-only view              |
-| `--seed`          |             int |      42 | random seed (startup stagger + box lengths)  |
-| `--start_stagger` |           float |    20.0 | random start window `[0..N]` seconds         |
+### Reproducir grabación
+```bash
+python main.py --replay out_22.sim.gz --view full
+python main.py --replay          # abre selector de archivo
+```
 
----
+### Opciones principales
 
-## What “good” looks like
-
-The expected diagnostic outcomes are:
-
-14 stations
-
-Often production-limited (operators can’t create enough items/h)
-
-Lower congestion, but may still fail to hit 2700/h
-
-22 stations
-
-Production capacity is higher, so:
-
-If belt/spacing is the bottleneck → tail saturates, stations near the end block heavily
-
-If belt can handle it (gap effectively reduced) → throughput may improve
+| Argumento | Default | Descripción |
+|-----------|---------|-------------|
+| `--stations` | 22 | Número de mesas |
+| `--duration` | 3600 | Duración simulada (s) |
+| `--speed` | 1.0 | Factor de velocidad de reproducción |
+| `--view` | full | `full` = toda la cinta, `tail` = últimas mesas |
+| `--push` | activado | Gap efectivo = 0 mm (empuje) |
+| `--no_push` | — | Gap = 100 mm (sin empuje) |
+| `--cycle_mean` | 60 | Media del ciclo operario (s) |
+| `--cycle_sd` | 6 | Desv. estándar del ciclo (s) |
+| `--p2` | 0.25 | Prob. de 2 paquetes por cubeta |
+| `--target_total_h` | 2700 | Target total bultos/hora |
+| `--target_boxes_h` | 1500 | Target paquetes/hora |
+| `--target_totes_h` | 1200 | Target cubetas vacías/hora |
+| `--record` | — | Ruta de grabación .sim.gz |
 
 ---
 
-## Known past issues (fixed)
+## Interfaz visual
 
-✅ Orders were finite per station → line “emptied” near the end
-Fixed by using infinite backlog (continuous work).
+### Panel de cinta
+- **Paquetes** → rectángulos **azules**
+- **Cubetas vacías** → rectángulos **naranjas**
+- **Mesas** → línea vertical con punto en la cinta
+  - Gris: normal
+  - Naranja: espera acumulada > 30 s
+  - **Rojo**: bloqueada activamente > 3 s
 
-✅ out_queue could be None and broke type checking
-Fixed using field(default_factory=list).
+### Información en cinta (por mesa)
+- **Encima**: identificador de mesa (M01…M22)
+- **Debajo**: tiempo de espera acumulado en badge de color
+  - Badge oscuro: < 10 s
+  - Badge amarillo: 10–60 s
+  - Badge rojo: > 60 s
+- **Badge rojo parpadeante**: bloqueo activo en curso
 
-✅ Layout was incorrect / inverted
-Corrected to pair spacing: 1.15m within, 2.60m between.
+### Panel KPI inferior (3 columnas)
+| Columna | Contenido |
+|---------|-----------|
+| PRODUCCIÓN | Barras de progreso total/paquetes/cubetas vs target, con delta |
+| OPERARIO | Media de ciclo, min, max, total ciclos observados |
+| ESPERAS | Total acumulado, media por mesa, peor mesa, últimas 4 mesas |
 
-✅ UI text overlap for wait labels
-Mitigated using pair offsets + white background tags.
-
----
-
-## Limitations (current)
-
-The belt model is 1D in physics (x-axis only). The UI is 2D purely for visualization.
-
-The simulation currently prioritizes correct operational logic over perfect physical fidelity.
-
-No CSV export yet in the current script (planned).
-
-No headless mode yet (planned) to run parameter sweeps without UI.
-
----
-
-## Repo / environment
-
-Developed on Windows using VS Code and Git Bash
-
-Repo name: SimTimedInd
+### Barra de progreso de tiempo
+Barra azul en la parte inferior con el tiempo simulado actual.
 
 ---
 
-## License
-
-Add your preferred license (MIT/Apache-2.0/etc.) if you plan to share publicly.
-Otherwise leave as internal/private.
+## Compilar como .exe (Windows)
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm --clean --onefile --windowed --name SimTimeInd main.py
+```
 
 ---
+
+## Requisitos
+- Python 3.10+
+- tkinter (incluido en la instalación estándar de Python)
+- Sin dependencias externas de terceros

@@ -1,11 +1,10 @@
-.venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.log
-.DS_Store
-.vscode/
-.idea/
-*.mp4
-frames/
+.venv/
+venv/
+.env
+dist/
+build/
+*.sim.gz
