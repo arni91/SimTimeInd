@@ -12,7 +12,8 @@ DT_S: float = 0.05                 # paso de simulación (s)
 DX_WITHIN_PAIR_M: float   = 1.10   # distancia entre las 2 mesas del par
 DX_BETWEEN_PAIRS_M: float = 2.74   # distancia entre pares consecutivos (general)
 DX_GAP_M6_M7: float       = 4.54   # excepcion: distancia entre M6 y M7
-DX_GAP_M18_M19: float     = 6.44   # excepcion: distancia entre M18 y M19
+DX_GAP_M16_M17: float     = 4.59   # excepcion: distancia entre M16 y M17
+DX_GAP_M18_M19: float     = 4.59   # excepcion: distancia entre M18 y M19
 
 # ── Dimensiones de ítems ────────────────────────────────────────
 TOTE_LEN_M: float   = 0.600       # longitud cubeta vacía (X)
@@ -41,7 +42,7 @@ CYCLE_SD_S: float   = 6.0
 CYCLE_MIN_S: float  = 30.0
 CYCLE_MAX_S: float  = 120.0
 
-P2_DEFAULT: float = 0.25           # prob. 2 paquetes/cubeta
+P2_DEFAULT: float = 0.25          # prob. 2 paquetes/cubeta
 P3_DEFAULT: float = 0.00           # prob. 3 paquetes/cubeta
 
 # ── Defaults arranque ───────────────────────────────────────────

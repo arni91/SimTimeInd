@@ -11,7 +11,7 @@ from .constants import (
     COUNTER_X_M,
 )
 from .models import Item, Station, SimSnapshot
-from .belt import build_station_positions, can_insert
+from .belt import build_station_positions, can_insert, find_best_insert_x, find_best_insert_x
 
 _TOTE_RELEASE_FRAC_MIN = 0.08
 _TOTE_RELEASE_FRAC_MAX = 0.13
@@ -188,19 +188,19 @@ class Engine:
                 # ── cubeta ───────────────────────────────────────
                 if st.tote_ready_t >= 0 and t >= st.tote_ready_t:
                     if t >= st.tote_next_try_t:
-                        # intento 1: gap normal (100mm)
-                        inserted = False
-                        if can_insert(self.items, st.x, TOTE_LEN_M, self.standard_gap_m):
-                            inserted = True
-                        # intento 2: push activo — comprimir items anteriores a gap=0
-                        elif self.push_enabled and can_insert(self.items, st.x, TOTE_LEN_M, 0.0):
-                            inserted = True
-                        if inserted:
+                        # buscar mejor punto en rango ±0.75m con gap normal
+                        insert_x = find_best_insert_x(
+                            self.items, st.x, TOTE_LEN_M, self.standard_gap_m)
+                        # si no cabe con gap normal, intentar con push (gap=0)
+                        if insert_x is None and self.push_enabled:
+                            insert_x = find_best_insert_x(
+                                self.items, st.x, TOTE_LEN_M, 0.0)
+                        if insert_x is not None:
                             item_time = max(0.0, t - st.tote_ready_t)
                             st.tote_time_sum   += item_time
                             st.tote_time_count += 1
                             st.current_cycle_times.append(("tote", item_time))
-                            self.items.append(Item("tote", st.x, TOTE_LEN_M))
+                            self.items.append(Item("tote", insert_x, TOTE_LEN_M))
                             self.inserted_total += 1
                             self.inserted_totes += 1
                             self.events.append([t, idx, 1, float(TOTE_LEN_M), 0])
@@ -209,6 +209,9 @@ class Engine:
                             st.tote_wait_start = -1.0
                             if st.box_queue:
                                 st.box_prep_start = t
+                            else:
+                                # sin paquetes — arrancar siguiente ciclo ya
+                                self._plan_new_cycle(st)
                         else:
                             if st.tote_wait_start < 0:
                                 st.tote_wait_start = t
@@ -222,32 +225,34 @@ class Engine:
                 # ── paquetes ─────────────────────────────────────
                 if st.box_queue and t >= st.box_queue[0]:
                     if t >= st.box_next_try_t:
-                        length = self._sample_box_length()
-                        # intento 1: gap normal
-                        inserted = False
-                        if can_insert(self.items, st.x, length, self.standard_gap_m):
-                            inserted = True
-                        # intento 2: push
-                        elif self.push_enabled and can_insert(self.items, st.x, length, 0.0):
-                            inserted = True
-                        if inserted:
+                        length: float = self._sample_box_length()
+                        # buscar mejor punto en rango ±0.75m con gap normal
+                        insert_x = find_best_insert_x(
+                            self.items, st.x, length, self.standard_gap_m)
+                        # si no cabe con gap normal, intentar con push (gap=0)
+                        if insert_x is None and self.push_enabled:
+                            insert_x = find_best_insert_x(
+                                self.items, st.x, length, 0.0)
+                        if insert_x is not None:
                             ready_t   = st.box_queue.pop(0)
                             item_time = max(0.0, t - ready_t)
                             st.box_time_sum   += item_time
                             st.box_time_count += 1
                             st.current_cycle_times.append(("box", item_time))
-                            self.items.append(Item("box", st.x, length))
+                            self.items.append(Item("box", insert_x, length))
                             self.inserted_total += 1
                             self.inserted_boxes += 1
                             self.events.append([t, idx, 0, float(length), 0])
                             st.box_next_try_t = t + RETRY_CHECK_S
-                            # actualizar prep timer para el siguiente paquete
                             if st.box_queue:
                                 st.box_prep_start      = t
                                 st.box_current_ready_t = st.box_queue[0]
                             else:
+                                # último bulto — arrancar siguiente ciclo ya
                                 st.box_prep_start      = -1.0
                                 st.box_current_ready_t = -1.0
+                                if st.tote_ready_t < 0:
+                                    self._plan_new_cycle(st)
                         else:
                             any_blocked       = True
                             st.box_next_try_t = t + RETRY_CHECK_S
@@ -296,8 +301,8 @@ class Engine:
         mean_tote = tote_sum / tote_cnt if tote_cnt > 0 else 0.0
         mean_box  = box_sum  / box_cnt  if box_cnt  > 0 else 0.0
 
-        # tasa basada en tiempo desde que llego el primer item al contador
-        t_counted = max(1.0, self.t - self.counter_first_t) if self.counter_first_t >= 0 else 1.0
+        # tasa basada en t completo — al cabo de 1h panel coincide con contador
+        t_counted = max(1.0, self.t)
         return SimSnapshot(
             t=self.t,
             inserted_total=self.inserted_total,
