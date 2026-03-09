@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..core.constants import (
     CANVAS_W, CANVAS_H, BELT_Y, ITEM_HALF_H,
-    TOTE_HALF_H, BOX_HALF_H,
+    TOTE_HALF_H, BOX_HALF_H, TOTE_WIDTH_MM, BOX_WIDTH_MM,
     PANEL_Y, PANEL_H,
     COLOR_BG, COLOR_BELT, COLOR_BELT_HL,
     COLOR_BOX, COLOR_TOTE,
@@ -29,7 +29,6 @@ _FONT_TIMER    = ("Consolas", 8, "bold")
 
 _WAIT_SHOW_S             = 2.0
 _ACTIVE_WAIT_THRESHOLD_S = 2.0
-_RATE_UPDATE_INTERVAL_S  = 2.0
 
 _COL_TOTE_PREP = "#7A5010"
 _COL_BOX_PREP  = "#104878"
@@ -46,7 +45,7 @@ class CanvasRenderer:
         self.canvas       = canvas
         self.view_start   = view_start
         self.view_end     = view_end
-        self.scale        = scale
+        self.scale        = scale        # px/m — usado para calcular alturas Y proporcionales
         self.stations     = station_list
         self.push_enabled = push_enabled
         self.eff_gap_m    = effective_gap_m
@@ -63,6 +62,20 @@ class CanvasRenderer:
     def _in_view(self, x_m):
         return self.view_start - 1.0 <= x_m <= self.view_end + 1.0
 
+    def _item_half_h(self, kind: str) -> int:
+        """
+        Semialtura en píxeles proporcional a los mm reales en Y.
+        Cubeta y paquete: 400mm en Y.
+        Usa self.scale (px/m) con factor de amplificación para visibilidad,
+        garantizando siempre que X (600mm cubeta) > Y (400mm) visualmente.
+        Factor 1.2 → 400mm * scale*1.2/2 ≈ 6-8px semialtura con escala full view.
+        """
+        width_m = (TOTE_WIDTH_MM if kind == "tote" else BOX_WIDTH_MM) / 1000.0
+        return max(4, int(round(width_m * self.scale * 1.2 / 2)))
+
+    def _belt_half_h(self) -> int:
+        return self._item_half_h("tote") + 6
+
     def draw(self, snap, items, tick=0):
         self._tick = tick
         c = self.canvas
@@ -77,7 +90,6 @@ class CanvasRenderer:
         self._draw_kpi_panel(snap)
         self._draw_footer(snap)
 
-    # ─────────────────────────────────────────────────────────────
     def _draw_background(self):
         c = self.canvas
         c.create_rectangle(0, 0, CANVAS_W, CANVAS_H, fill=COLOR_BG, outline="")
@@ -85,7 +97,6 @@ class CanvasRenderer:
             c.create_line(0, y, CANVAS_W, y, fill=COLOR_GRID, width=1)
 
     def _draw_info_bar(self):
-        """Barra fija encima de la cinta con las constantes del sistema."""
         c = self.canvas
         y, bh = _INFO_BAR_Y, _INFO_BAR_H
         c.create_rectangle(0, y, CANVAS_W, y + bh, fill="#0D1018", outline="")
@@ -97,7 +108,7 @@ class CanvasRenderer:
             ("Cubeta",  f"{TOTE_LEN_M*1000:.0f} mm"),
             ("Paquete", f"{BOX_MEAN_M*1000:.0f} mm media  ({BOX_MIN_M*1000:.0f}-{BOX_MAX_M*1000:.0f} mm)"),
             ("Gap",     f"{self.eff_gap_m*1000:.0f} mm"),
-            ("Push",    "ON" if self.push_enabled else "OFF"),
+            ("Push",    "ON (gap 0mm si no cabe)" if self.push_enabled else "OFF"),
         ]
         cx = 12
         ty = y + bh // 2
@@ -112,7 +123,7 @@ class CanvasRenderer:
     def _draw_belt(self):
         c = self.canvas
         x0, x1 = self._px(self.view_start), self._px(self.view_end)
-        by, h   = BELT_Y, TOTE_HALF_H + 8
+        by, h = BELT_Y, self._belt_half_h()
         c.create_rectangle(x0, by-h+4, x1, by+h+6, fill="#0D0F14", outline="")
         c.create_rectangle(x0, by-h,   x1, by+h,   fill=COLOR_BELT, outline=COLOR_BELT_HL, width=1)
         c.create_line(x0, by-h, x1, by-h, fill="#5A6070", width=2)
@@ -120,33 +131,31 @@ class CanvasRenderer:
         c.create_line(x0, by,   x1, by,   fill="#252830", width=1, dash=(4, 8))
 
     def _draw_counter_marker(self, snap):
-        """Línea vertical + etiqueta CONTADOR en la posición de conteo."""
         if not self._in_view(snap.counter_x_m):
             return
-        c  = self.canvas
+        c = self.canvas
         px = self._px(snap.counter_x_m)
         by = BELT_Y
-        h  = TOTE_HALF_H + 8
+        h = self._belt_half_h()
 
-        # línea vertical destacada
         c.create_line(px, by-h-30, px, by+h+30, fill="#F5A623", width=2, dash=(6, 4))
 
-        # etiqueta superior
-        c.create_rectangle(px-38, by-h-44, px+38, by-h-26, fill="#2A2000", outline="#F5A623", width=1)
+        top_w = 86
+        c.create_rectangle(px-top_w//2, by-h-44, px+top_w//2, by-h-26,
+                           fill="#2A2000", outline="#F5A623", width=1)
         c.create_text(px, by-h-35, text="CONTADOR", fill="#F5A623",
                       font=("Consolas", 8, "bold"), anchor="center")
 
-        # números debajo de la cinta con fondo para legibilidad
-        num_y1 = by + h + 50   # total
-        num_y2 = by + h + 66   # desglose
-
-        c.create_rectangle(px-38, num_y1-12, px+38, num_y2+10,
+        total_txt  = f"{snap.counted_total}"
+        detail_txt = f"P:{snap.counted_boxes}  C:{snap.counted_totes}"
+        box_w = max(96, len(total_txt)*9+20, len(detail_txt)*7+20)
+        num_y1 = by + h + 50
+        num_y2 = by + h + 66
+        c.create_rectangle(px-box_w//2, num_y1-12, px+box_w//2, num_y2+10,
                            fill="#0D1018", outline="#F5A623", width=1)
-        c.create_text(px, num_y1,
-                      text=f"{snap.counted_total}",
+        c.create_text(px, num_y1, text=total_txt,
                       fill="#F5A623", font=("Consolas", 11, "bold"), anchor="center")
-        c.create_text(px, num_y2,
-                      text=f"P:{snap.counted_boxes}  C:{snap.counted_totes}",
+        c.create_text(px, num_y2, text=detail_txt,
                       fill=COLOR_TEXT_SECONDARY, font=("Consolas", 8), anchor="center")
 
     def _draw_items(self, items):
@@ -157,11 +166,11 @@ class CanvasRenderer:
                 continue
             fx  = self._px(it.front_x)
             rx  = self._px(it.rear_x)
-            ih  = TOTE_HALF_H if it.kind == "tote" else BOX_HALF_H
-            col = COLOR_BOX   if it.kind == "box"  else COLOR_TOTE
+            ih  = self._item_half_h(it.kind)
+            col = COLOR_BOX if it.kind == "box" else COLOR_TOTE
             c.create_rectangle(rx+2, by-ih+3, fx+2, by+ih+3, fill="#111418", outline="")
-            c.create_rectangle(rx,   by-ih,   fx,   by+ih,   fill=col,              outline="")
-            c.create_rectangle(rx,   by-ih,   fx,   by-ih+3, fill=_lighten(col,40), outline="")
+            c.create_rectangle(rx,   by-ih,   fx,   by+ih,   fill=col, outline="")
+            c.create_rectangle(rx,   by-ih,   fx,   by-ih+3, fill=_lighten(col, 40), outline="")
 
     def _draw_stations(self, snap):
         c = self.canvas
@@ -180,8 +189,8 @@ class CanvasRenderer:
             px   = self._px(x_m)
             pair = i % 2
 
-            acc_s, blocked_now, wait_now_s         = wait_map.get(sid,  (0.0, False, 0.0))
-            tote_prep_s, box_prep_s, tote_wait_s   = timer_map.get(sid, (-1.0, -1.0, -1.0))
+            acc_s, blocked_now, wait_now_s       = wait_map.get(sid,  (0.0, False, 0.0))
+            tote_prep_s, box_prep_s, tote_wait_s = timer_map.get(sid, (-1.0, -1.0, -1.0))
 
             if blocked_now and wait_now_s >= WAIT_BLOCKED_THRESHOLD_S:
                 col_line = COLOR_STATION_CRIT
@@ -196,16 +205,13 @@ class CanvasRenderer:
             c.create_text(px, by-(68+pair*16), text=sid,
                           fill=col_text, font=_FONT_LABEL_MD, anchor="center")
 
-            # badges bajo la mesa
             y_badges = by + 58 + pair * 16
             badges   = []
-
             if tote_prep_s >= 0:
                 if tote_wait_s >= _WAIT_SHOW_S:
                     badges.append((f"C:{tote_wait_s:.0f}s", _COL_WAIT_BG,   COLOR_TEXT_BAD))
                 else:
                     badges.append((f"C:{tote_prep_s:.0f}s", _COL_TOTE_PREP, COLOR_KPI_TOTE))
-
             if box_prep_s >= 0:
                 badges.append((f"P:{box_prep_s:.0f}s", _COL_BOX_PREP, COLOR_KPI_BOX))
 
@@ -214,74 +220,51 @@ class CanvasRenderer:
                 total_w = sum(bw_list) + (len(badges)-1)*3
                 bx = px - total_w // 2
                 for (txt, bg, fg), bw in zip(badges, bw_list):
-                    c.create_rectangle(bx, y_badges-7, bx+bw, y_badges+7,
-                                       fill=bg, outline="")
+                    c.create_rectangle(bx, y_badges-7, bx+bw, y_badges+7, fill=bg, outline="")
                     c.create_text(bx+bw//2, y_badges, text=txt, fill=fg,
                                   font=_FONT_TIMER, anchor="center")
                     bx += bw + 3
 
     def _draw_dimension_lines(self):
-        """Cotas de distancia entre mesas consecutivas + cota total M1-M22.
-
-        Nivel 1 (alterno A/B) — cotas entre pares de mesas consecutivas
-          Fila A (i par):   by - 110  →  texto a by - 118
-          Fila B (i impar): by - 128  →  texto a by - 136
-        Nivel 2 — cota total M1-M22
-          by - 150  →  texto a by - 158
-        """
         c  = self.canvas
         by = BELT_Y
-
         xs = [st.x if hasattr(st, "x") else float(st["x"]) for st in self.stations]
         if len(xs) < 2:
             return
 
-        col_dim   = "#4A5568"   # gris azulado — no compite con nada
+        col_dim   = "#4A5568"
         col_text  = "#6B7A94"
         col_total = "#8896AA"
-        tick_h    = 6           # altura de las marcas verticales de cota
+        tick_h    = 6
         fnt_sm    = ("Consolas", 7)
         fnt_tot   = ("Consolas", 7, "bold")
 
-        # ── cotas individuales ────────────────────────────────────
         for i in range(len(xs) - 1):
             x0m = xs[i];  x1m = xs[i + 1]
             if not (self._in_view(x0m) or self._in_view(x1m)):
                 continue
             px0 = self._px(x0m);  px1 = self._px(x1m)
-            # alternar altura para evitar solapamiento en gaps pequeños
             row_y = by - 155 if (i % 2 == 0) else by - 171
-
-            # línea horizontal de cota
             c.create_line(px0, row_y, px1, row_y, fill=col_dim, width=1)
-            # marcas verticales (ticks)
-            c.create_line(px0, row_y - tick_h, px0, row_y + tick_h, fill=col_dim, width=1)
-            c.create_line(px1, row_y - tick_h, px1, row_y + tick_h, fill=col_dim, width=1)
-            # texto centrado
+            c.create_line(px0, row_y-tick_h, px0, row_y+tick_h, fill=col_dim, width=1)
+            c.create_line(px1, row_y-tick_h, px1, row_y+tick_h, fill=col_dim, width=1)
             dist = x1m - x0m
             mid  = (px0 + px1) // 2
-            c.create_text(mid, row_y - 5, text=f"{dist:.2f}m",
+            c.create_text(mid, row_y-5, text=f"{dist:.2f}m",
                           fill=col_text, font=fnt_sm, anchor="s")
 
-        # ── cota total M1-M22 ─────────────────────────────────────
         if self._in_view(xs[0]) or self._in_view(xs[-1]):
             px_first = self._px(xs[0])
             px_last  = self._px(xs[-1])
             tot_y    = by - 191
-
-            # línea total
             c.create_line(px_first, tot_y, px_last, tot_y, fill=col_total, width=1)
-            # ticks más largos en los extremos
-            c.create_line(px_first, tot_y - tick_h - 2, px_first, tot_y + tick_h + 2, fill=col_total, width=1)
-            c.create_line(px_last,  tot_y - tick_h - 2, px_last,  tot_y + tick_h + 2, fill=col_total, width=1)
-            # texto total
+            c.create_line(px_first, tot_y-tick_h-2, px_first, tot_y+tick_h+2, fill=col_total, width=1)
+            c.create_line(px_last,  tot_y-tick_h-2, px_last,  tot_y+tick_h+2, fill=col_total, width=1)
             total_dist = xs[-1] - xs[0]
             mid_tot    = (px_first + px_last) // 2
-            c.create_text(mid_tot, tot_y - 5,
+            c.create_text(mid_tot, tot_y-5,
                           text=f"M1-M22 = {total_dist:.2f} m",
                           fill=col_total, font=fnt_tot, anchor="s")
-
-    # ── panel KPI ────────────────────────────────────────────────
 
     def _draw_kpi_panel(self, snap):
         c = self.canvas
@@ -318,19 +301,10 @@ class CanvasRenderer:
             y += bh + 6
 
     def _kpi_operator(self, snap, x, y):
-        """
-        Tiempo medio / cubeta = ciclo completo (snap.cycle_mean_s)
-        Desglose:
-          Cubeta vacia = fraccion del ciclo dedicada solo a la cubeta
-          Paquete      = fraccion del ciclo dedicada a los paquetes
-          cubeta_s + paquete_s == cycle_mean_s  (siempre)
-        """
         c = self.canvas
         c.create_text(x, y, text="OPERARIO",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
         y += 18
-
-        # ── Tiempo medio / cubeta ────────────────────────────────
         mean = snap.cycle_mean_s
         mean_col = COLOR_TEXT_GOOD if mean <= 65 else COLOR_TEXT_WARN
         c.create_text(x,     y, text="Tiempo medio / cubeta",
@@ -338,59 +312,44 @@ class CanvasRenderer:
         c.create_text(x+200, y, text=f"{mean:.1f} s" if mean > 0 else "---",
                       fill=mean_col, font=_FONT_MONO_LG, anchor="nw")
         y += 24
-
         c.create_text(x, y,
                       text=f"Min {snap.cycle_min_s:.0f}s   Max {snap.cycle_max_s:.0f}s   Obs. {snap.cycle_count}",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
         y += 18
-
         c.create_line(x+10, y, x+370, y, fill=COLOR_PANEL_BORDER, width=1)
         y += 8
 
-        # ── Desglose: cubeta_s + paquete_s = cycle_mean_s ───────
-        #
-        # mean_tote_s = media del tiempo que tarda el operario en
-        #               preparar e inducir la cubeta vacia (por ciclo)
-        # mean_box_s  = media del tiempo por paquete individual
-        #
-        # Para que sumen el ciclo calculamos:
-        #   tote_share = snap.mean_tote_s               (tiempo cubeta)
-        #   box_share  = cycle_mean - tote_share         (resto = paquetes)
-        #
-        # Esto garantiza tote_share + box_share == cycle_mean exactamente.
-
-        # Fraccion fija configurada para la cubeta: media de (8%-13%) del ciclo
-        # Debe coincidir con _TOTE_RELEASE_FRAC_MIN/MAX en engine.py
-        _TOTE_FRAC = (0.08 + 0.13) / 2.0   # = 0.105
-        tote_s = _TOTE_FRAC * mean          # tiempo configurado cubeta
-        box_s  = max(0.0, mean - tote_s)    # resto del ciclo = paquetes
+        _TOTE_FRAC = (0.08 + 0.13) / 2.0
+        tote_s = _TOTE_FRAC * mean
+        box_s  = max(0.0, mean - tote_s)
         ref    = mean if mean > 0 else 1.0
 
         c.create_text(x, y, text="Desglose  (suman Tiempo medio / cubeta):",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
         y += 16
 
-        # cubeta vacia
         tote_str = f"{tote_s:.1f} s" if mean > 0 else "---"
         tote_pct = f"{tote_s/ref*100:.0f}%" if mean > 0 else ""
-        tote_col = COLOR_KPI_TOTE if mean > 0 else COLOR_TEXT_SECONDARY
         c.create_rectangle(x+8, y+2, x+20, y+12, fill=COLOR_TOTE, outline="")
         c.create_text(x+26,  y, text="Cubeta vacia",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
-        c.create_text(x+200, y, text=tote_str, fill=tote_col,             font=_FONT_MONO_MD, anchor="nw")
-        c.create_text(x+255, y, text=tote_pct, fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
+        c.create_text(x+200, y, text=tote_str,
+                      fill=COLOR_KPI_TOTE if mean > 0 else COLOR_TEXT_SECONDARY,
+                      font=_FONT_MONO_MD, anchor="nw")
+        c.create_text(x+255, y, text=tote_pct,
+                      fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
         y += 18
 
-        # paquetes (resto del ciclo)
         box_str = f"{box_s:.1f} s" if mean > 0 else "---"
-        box_pct = f"{box_s/ref*100:.0f}%"  if mean > 0 else ""
-        box_col = COLOR_KPI_BOX if mean > 0 else COLOR_TEXT_SECONDARY
+        box_pct = f"{box_s/ref*100:.0f}%" if mean > 0 else ""
         c.create_rectangle(x+8, y+2, x+20, y+12, fill=COLOR_BOX, outline="")
         c.create_text(x+26,  y, text="Paquetes",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
-        c.create_text(x+200, y, text=box_str, fill=box_col,               font=_FONT_MONO_MD, anchor="nw")
-        c.create_text(x+255, y, text=box_pct, fill=COLOR_TEXT_SECONDARY,  font=_FONT_SANS_SM, anchor="nw")
-        y += 22
+        c.create_text(x+200, y, text=box_str,
+                      fill=COLOR_KPI_BOX if mean > 0 else COLOR_TEXT_SECONDARY,
+                      font=_FONT_MONO_MD, anchor="nw")
+        c.create_text(x+255, y, text=box_pct,
+                      fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
 
     def _kpi_waits(self, snap, x, y):
         c = self.canvas
@@ -446,8 +405,6 @@ class CanvasRenderer:
                             f"   |   mesas={len(self.stations)}   |   vista={self.view_label}"),
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_MONO_SM, anchor="w")
 
-
-# ── helpers ──────────────────────────────────────────────────────
 
 def _lighten(hex_col, amount):
     try:

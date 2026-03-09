@@ -34,7 +34,7 @@ class Engine:
         p2: float,
         p3: float,
         box_sd_m: float = BOX_SD_M_DEFAULT,
-        push_enabled: bool = False,
+        push_enabled: bool = True,
         target_total_h: float = TARGET_TOTAL_H,
         target_boxes_h: float = TARGET_BOXES_H,
         target_totes_h: float = TARGET_TOTES_H,
@@ -188,7 +188,14 @@ class Engine:
                 # ── cubeta ───────────────────────────────────────
                 if st.tote_ready_t >= 0 and t >= st.tote_ready_t:
                     if t >= st.tote_next_try_t:
-                        if can_insert(self.items, st.x, TOTE_LEN_M, self.effective_gap_m):
+                        # intento 1: gap normal (100mm)
+                        inserted = False
+                        if can_insert(self.items, st.x, TOTE_LEN_M, self.standard_gap_m):
+                            inserted = True
+                        # intento 2: push activo — comprimir items anteriores a gap=0
+                        elif self.push_enabled and can_insert(self.items, st.x, TOTE_LEN_M, 0.0):
+                            inserted = True
+                        if inserted:
                             item_time = max(0.0, t - st.tote_ready_t)
                             st.tote_time_sum   += item_time
                             st.tote_time_count += 1
@@ -200,7 +207,6 @@ class Engine:
                             st.tote_ready_t    = -1.0
                             st.tote_prep_start = -1.0
                             st.tote_wait_start = -1.0
-                            # timer P arranca AHORA — justo cuando se induce la cubeta
                             if st.box_queue:
                                 st.box_prep_start = t
                         else:
@@ -209,7 +215,6 @@ class Engine:
                             wait_so_far = t - st.tote_wait_start
                             if wait_so_far >= _TOTE_MAX_WAIT_S:
                                 any_blocked = True
-                                # operario empieza a preparar paquetes en paralelo
                                 if st.box_prep_start < 0 and st.box_queue:
                                     st.box_prep_start = t
                             st.tote_next_try_t = t + RETRY_CHECK_S
@@ -218,7 +223,14 @@ class Engine:
                 if st.box_queue and t >= st.box_queue[0]:
                     if t >= st.box_next_try_t:
                         length = self._sample_box_length()
-                        if can_insert(self.items, st.x, length, self.effective_gap_m):
+                        # intento 1: gap normal
+                        inserted = False
+                        if can_insert(self.items, st.x, length, self.standard_gap_m):
+                            inserted = True
+                        # intento 2: push
+                        elif self.push_enabled and can_insert(self.items, st.x, length, 0.0):
+                            inserted = True
+                        if inserted:
                             ready_t   = st.box_queue.pop(0)
                             item_time = max(0.0, t - ready_t)
                             st.box_time_sum   += item_time

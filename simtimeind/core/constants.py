@@ -31,7 +31,7 @@ TARGET_TOTES_H: float = 1200.0
 # ── Gaps de inducción ───────────────────────────────────────────
 STANDARD_GAP_M: float  = 0.1     # gap sin empuje
 PUSH_GAP_M: float      = 0.0      # gap con empuje activado
-PUSH_ENABLED_DEFAULT: bool = False
+PUSH_ENABLED_DEFAULT: bool = True
 
 RETRY_CHECK_S: float = DT_S       # cadencia de reintento de inserción
 
