@@ -47,28 +47,33 @@ def find_best_insert_x(items: list, x_center: float, length: float,
     [x_center - half_range,  x_center + half_range].
 
     x_center es el punto nominal de inducción de la mesa (st.x).
-    El bulto se puede inducir en cualquier front_x dentro de ese rango.
+    El bulto tiene su front_x dentro de ese rango.
+    front_x mínimo absoluto = length (para que rear_x >= 0 en la cinta).
 
     Candidatos evaluados:
-      - el centro exacto (x_center)
-      - justo después de cada item vecino: front_x = it.front_x + gap + length
-      - justo antes  de cada item vecino: front_x = it.rear_x  - gap
+      - el centro del rango (o front_x mínimo si el centro queda fuera)
+      - justo después de cada item vecino: it.front_x + gap + length
+      - justo antes  de cada item vecino: it.rear_x  - gap
 
     Elige el candidato válido que maximiza el hueco mínimo a los vecinos,
     con pequeña penalización por alejarse del centro.
 
     Devuelve el front_x óptimo, o None si no cabe en ningún punto del rango.
     """
-    fx_min = x_center - half_range   # front_x mínimo permitido
-    fx_max = x_center + half_range   # front_x máximo permitido
+    fx_min   = max(length, x_center - half_range)          # rear_x no puede ser < 0
+    fx_max   = max(length, x_center + half_range)          # idem
+    fx_ideal = max(fx_min, min(fx_max, x_center))          # punto preferido dentro del rango
+
+    if fx_min > fx_max:
+        return None
 
     # Items que pueden interferir con cualquier punto del rango
     zone_min = fx_min - length - gap
     zone_max = fx_max + gap
     relevant = [it for it in items if it.front_x > zone_min and it.rear_x < zone_max]
 
-    # Candidatos: centro + puntos óptimos junto a cada item vecino
-    candidates: list[float] = [x_center]
+    # Candidatos: punto ideal + puntos óptimos junto a cada item vecino
+    candidates: list[float] = [fx_ideal]
     for it in relevant:
         candidates.append(it.front_x + gap + length)  # justo detrás del item
         candidates.append(it.rear_x  - gap)            # justo delante del item
@@ -77,20 +82,17 @@ def find_best_insert_x(items: list, x_center: float, length: float,
     best_score = -1e18
 
     for fx in candidates:
-        # debe estar dentro del rango de inducción
         if fx < fx_min or fx > fx_max:
             continue
         if not can_insert(items, fx, length, gap):
             continue
 
-        # maximizar el hueco mínimo a los vecinos
         min_dist = min(
             (min(abs(fx - it.front_x), abs(fx - length - it.rear_x))
              for it in relevant),
             default=half_range,
         )
-        # penalizar alejarse del centro
-        score = min_dist - abs(fx - x_center) * 0.01
+        score = min_dist - abs(fx - fx_ideal) * 0.01
 
         if best_x is None or score > best_score:
             best_x = fx

@@ -42,7 +42,7 @@ CYCLE_SD_S: float   = 6.0
 CYCLE_MIN_S: float  = 30.0
 CYCLE_MAX_S: float  = 120.0
 
-P2_DEFAULT: float = 0.25          # prob. 2 paquetes/cubeta
+P2_DEFAULT: float = 0.27          # prob. 2 paquetes/cubeta
 P3_DEFAULT: float = 0.00           # prob. 3 paquetes/cubeta
 
 # ── Defaults arranque ───────────────────────────────────────────
