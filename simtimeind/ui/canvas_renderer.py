@@ -613,45 +613,41 @@ class CanvasRenderer:
         c.create_text(lx + 122, ly + 6, text="Cubeta",  fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="w")
 
         # ── Barra de progreso ────────────────────────────────────────
+        _COL_WARMUP_ZONE = "#1E1A2E"   # fondo zona calentamiento (morado muy oscuro)
+        _COL_WARMUP_PROG = "#6B5B95"   # progreso durante calentamiento (morado)
+        _COL_WARMUP_LINE = "#8B7BB5"   # marcador vertical
+        _COL_BAR_NORMAL  = "#546E7A"   # progreso normal (gris azulado)
+
         c.create_rectangle(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h,
                            fill="#252830", outline="")
 
-        # Zona de calentamiento: tono ámbar apagado
+        # Zona de calentamiento: fondo morado oscuro
         if self.warmup_s > 0:
             warmup_frac = self.warmup_s / max(1, self.duration_s)
             warmup_px   = int(bar_w * warmup_frac)
             c.create_rectangle(bar_x, bar_y, bar_x + warmup_px, bar_y + bar_h,
-                               fill="#3D2E00", outline="")
+                               fill=_COL_WARMUP_ZONE, outline="")
 
-        # Progreso actual: gris azulado o ámbar si en calentamiento
-        fill_col = COLOR_TEXT_WARN if snap.in_warmup else "#546E7A"
+        # Progreso actual
+        fill_col = _COL_WARMUP_PROG if snap.in_warmup else _COL_BAR_NORMAL
         c.create_rectangle(bar_x, bar_y, bar_x + int(bar_w * prog), bar_y + bar_h,
                            fill=fill_col, outline="")
 
-        # Marcador de inicio de medición
+        # Marcador vertical en el límite del calentamiento (sin texto)
         if self.warmup_s > 0:
             warmup_frac = self.warmup_s / max(1, self.duration_s)
             mx = bar_x + int(bar_w * warmup_frac)
-            c.create_line(mx, bar_y - 5, mx, bar_y + bar_h + 5,
-                          fill=COLOR_TEXT_WARN, width=2)
-            label = "INICIO MEDICION" if not snap.in_warmup else "CALENTAMIENTO"
-            anchor = "ne" if snap.in_warmup else "nw"
-            c.create_text(mx + (4 if not snap.in_warmup else -4), bar_y - 6,
-                          text=label,
-                          fill=COLOR_TEXT_WARN, font=_FONT_SANS_XS, anchor=anchor)
+            c.create_line(mx, bar_y - 4, mx, bar_y + bar_h + 4,
+                          fill=_COL_WARMUP_LINE, width=2)
 
         # Texto de tiempo
-        if snap.in_warmup:
-            tiempo_txt = f"  CALENTAMIENTO  {fmt_time_min(snap.t)} / {fmt_time_min(self.warmup_s)}"
-        else:
-            t_prod = snap.t - self.warmup_s
-            tiempo_txt = (f"  {fmt_time_min(snap.t)} / {fmt_time_min(self.duration_s)}"
-                          f"   |   medicion: {fmt_time_min(t_prod)}"
-                          f"   |   mesas={len(self.stations)}")
+        t_prod = max(0.0, snap.t - self.warmup_s)
+        tiempo_txt = (f"  {fmt_time_min(snap.t)} / {fmt_time_min(self.duration_s)}"
+                      f"   |   medicion: {fmt_time_min(t_prod)}"
+                      f"   |   mesas={len(self.stations)}")
         c.create_text(bar_x, bar_y - 18,
                       text=tiempo_txt,
-                      fill=COLOR_TEXT_SECONDARY if not snap.in_warmup else COLOR_TEXT_WARN,
-                      font=_FONT_MONO_SM, anchor="w")
+                      fill=COLOR_TEXT_SECONDARY, font=_FONT_MONO_SM, anchor="w")
 
 
 def _lighten(hex_col, amount):
