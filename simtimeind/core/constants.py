@@ -9,11 +9,11 @@ BELT_SPEED_MPM: float = 22.0       # m/min
 DT_S: float = 0.05                 # paso de simulación (s)
 
 # ── Geometría de mesas ──────────────────────────────────────────
-DX_WITHIN_PAIR_M: float   = 1.10   # distancia entre las 2 mesas juntas
-DX_BETWEEN_PAIRS_M: float = 2.74   # distancia entre pares consecutivos (general)
-DX_GAP_M6_M7: float       = 4.54   # excepcion: distancia entre M6 y M7
-DX_GAP_M16_M17: float     = 4.59   # excepcion: distancia entre M16 y M17
-DX_GAP_M18_M19: float     = 4.59   # excepcion: distancia entre M18 y M19
+DX_WITHIN_PAIR_M: float   = 2.80   # distancia entre las 2 mesas juntas
+DX_BETWEEN_PAIRS_M: float = 1.00   # distancia entre pares consecutivos (general)
+DX_GAP_M6_M7: float       = 2.50   # excepcion: distancia entre M6 y M7
+DX_GAP_M16_M17: float     = 2.35   # excepcion: distancia entre M16 y M17
+DX_GAP_M18_M19: float     = 2.35   # excepcion: distancia entre M18 y M19
 
 # ── Dimensiones de ítems ────────────────────────────────────────
 TOTE_LEN_M: float   = 0.600       # longitud cubeta vacía (X)
@@ -62,27 +62,27 @@ ZONE2_N: int = 7   # número de mesas en zona 2  (M08–M14)
 ZONE3_N: int = 7   # número de mesas en zona 3  (M15–M21)
 
 #   Zona 1: M01–M07
-CYCLE_MEAN_M01_M07_S: float = 63.0                                  # ← ciclo medio (s)
+CYCLE_MEAN_M01_M07_S: float = 62.0                                  # ← ciclo medio (s)
 ZONE1_TOTES_H:        float = 3600.0 / CYCLE_MEAN_M01_M07_S         #   cubetas/h por mesa
 ZONE1_BOXES_H:        float = ZONE1_TOTES_H * _MEAN_PKG_PER_CYCLE   #   paquetes/h por mesa
 ZONE1_TOTAL_TOTES_H:  float = ZONE1_TOTES_H * ZONE1_N               #   cubetas/h zona total
 ZONE1_TOTAL_BOXES_H:  float = ZONE1_BOXES_H  * ZONE1_N              #   paquetes/h zona total
 
 #   Zona 2: M08–M14
-CYCLE_MEAN_M08_M14_S: float = 63.0                                  # ← ciclo medio (s)
+CYCLE_MEAN_M08_M14_S: float = 62.0                                  # ← ciclo medio (s)
 ZONE2_TOTES_H:        float = 3600.0 / CYCLE_MEAN_M08_M14_S
 ZONE2_BOXES_H:        float = ZONE2_TOTES_H * _MEAN_PKG_PER_CYCLE
 ZONE2_TOTAL_TOTES_H:  float = ZONE2_TOTES_H * ZONE2_N
 ZONE2_TOTAL_BOXES_H:  float = ZONE2_BOXES_H  * ZONE2_N
 
 #   Zona 3: M15–M21
-CYCLE_MEAN_M15_M21_S: float = 63.0                                  # ← ciclo medio (s)
+CYCLE_MEAN_M15_M21_S: float = 62.0                                  # ← ciclo medio (s)
 ZONE3_TOTES_H:        float = 3600.0 / CYCLE_MEAN_M15_M21_S
 ZONE3_BOXES_H:        float = ZONE3_TOTES_H * _MEAN_PKG_PER_CYCLE
 ZONE3_TOTAL_TOTES_H:  float = ZONE3_TOTES_H * ZONE3_N
 ZONE3_TOTAL_BOXES_H:  float = ZONE3_BOXES_H  * ZONE3_N
 
-CYCLE_SD_S:  float = 0.0        # desviación estándar del tiempo de ciclo (s)
+CYCLE_SD_S:  float = 3.0        # desviación estándar del tiempo de ciclo (s)
                                 # controla cuánto varía el ciclo de un operario a otro
 CYCLE_MIN_S: float = 30.0       # tiempo de ciclo mínimo absoluto (s) — ningún operario va más rápido
 CYCLE_MAX_S: float = 120.0      # tiempo de ciclo máximo absoluto (s) — ningún operario va más lento
@@ -95,7 +95,7 @@ START_STAGGER_S: float = 60         # tiempo entre arranques de operarios (si se
 EXE_STATIONS: int     = 22
 EXE_SPEED: float      = 1.0
 EXE_DURATION_S: float = 3900.0   # 65 min: 5 min calentamiento + 60 min medición
-EXE_SEED: int         = 42
+EXE_SEED: int | None  = None   # None = semilla aleatoria cada ejecución
 EXE_VIEW: str         = "full"
 EXE_RECORD_PATH       = None
 

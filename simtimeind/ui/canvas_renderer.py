@@ -21,7 +21,7 @@ from ..core.constants import (
     _MEAN_PKG_PER_CYCLE,
 )
 from ..core.models import SimSnapshot
-from ..utils.formatting import fmt_time_min, fmt_delta, fmt_rate, color_delta
+from ..utils.formatting import fmt_time_min, fmt_delta, color_delta
 
 _FONT_MONO_SM  = ("Consolas", 9)
 _FONT_MONO_MD  = ("Consolas", 11)
@@ -157,8 +157,8 @@ class CanvasRenderer:
         p_txt     = f"P:{snap.counted_boxes}"
         c_txt     = f"C:{snap.counted_totes}"
         box_w  = max(110, len(total_txt) * 9 + 20)
-        num_y1 = by + h + 50
-        num_y2 = by + h + 66
+        num_y1 = by + h + 30
+        num_y2 = by + h + 46
         c.create_rectangle(px - box_w//2, num_y1 - 12, px + box_w//2, num_y2 + 10,
                             fill="#0D1018", outline=_COL_COUNTER, width=1)
         c.create_text(px, num_y1, text=total_txt,
@@ -287,7 +287,7 @@ class CanvasRenderer:
             c.create_rectangle(bx, box_top, bx + box_w, box_top + box_h,
                                 fill=_COL_MOTOR_BG, outline=col, width=1)
             c.create_text(px, box_top + box_h // 2,
-                          text=f"Dr{num}  {MOTOR_SPEED_MPM:.0f}m/min",
+                          text=f"M{num}  {MOTOR_SPEED_MPM:.0f}m/min",
                           fill=col, font=fnt, anchor="center")
 
     def _draw_dimension_lines(self):
@@ -309,7 +309,7 @@ class CanvasRenderer:
             if not (self._in_view(x0m) or self._in_view(x1m)):
                 continue
             px0, px1  = self._px(x0m), self._px(x1m)
-            row_y     = by - 285 if (i % 2 == 0) else by - 301
+            row_y     = by - 285
             c.create_line(px0, row_y, px1, row_y, fill=col_dim, width=1)
             c.create_line(px0, row_y - tick_h, px0, row_y + tick_h, fill=col_dim, width=1)
             c.create_line(px1, row_y - tick_h, px1, row_y + tick_h, fill=col_dim, width=1)
@@ -364,26 +364,21 @@ class CanvasRenderer:
         y += 18
 
         # ── cabeceras de columna ─────────────────────────────────────
-        bw = 190
-        c.create_text(x + bw + 48, y + 6, text="contados",
+        bw = 250
+        c.create_text(x + bw + 55, y + 6, text="contados",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_XS, anchor="e")
-        c.create_text(x + bw + 120, y + 6, text="diferencia",
-                      fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_XS, anchor="w")
-        c.create_text(x + bw + 185, y + 6, text="ult. 60s /h",
+        c.create_text(x + bw + 130, y + 6, text="diferencia",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_XS, anchor="w")
         y += 22
 
         rows = [
-            ("TOTAL",    counter_snap.counted_total, int(self.tgt_total),
-             snap.rate_window_total_h, COLOR_TEXT_GOOD),
-            ("PAQUETES", counter_snap.counted_boxes, int(self.tgt_boxes),
-             snap.rate_window_boxes_h, COLOR_BOX),
-            ("CUBETAS",  counter_snap.counted_totes, int(self.tgt_totes),
-             snap.rate_window_totes_h, COLOR_KPI_TOTE),
+            ("TOTAL",    counter_snap.counted_total, int(self.tgt_total), COLOR_TEXT_GOOD),
+            ("PAQUETES", counter_snap.counted_boxes, int(self.tgt_boxes), COLOR_BOX),
+            ("CUBETAS",  counter_snap.counted_totes, int(self.tgt_totes), COLOR_KPI_TOTE),
         ]
 
         bh = 24
-        for label, counted, tgt, rate, col in rows:
+        for label, counted, tgt, col in rows:
             # ── barra de progreso: contador / objetivo ───────────────
             fp = min(int(counted / max(1, tgt) * bw), bw)
             c.create_rectangle(x, y, x + bw, y + bh, fill="#1E2128", outline="")
@@ -393,19 +388,15 @@ class CanvasRenderer:
                           fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="w")
 
             # ── contador: número grande ──────────────────────────────
-            c.create_text(x + bw + 48, y + 12, text=str(counted),
+            c.create_text(x + bw + 55, y + 12, text=str(counted),
                           fill=col, font=_FONT_MONO_LG, anchor="e")
 
             # ── delta: contador vs objetivo total ────────────────────
             cnt_delta = counted - tgt
             cnt_dcol  = (COLOR_TEXT_GOOD if cnt_delta >= 0 else COLOR_TEXT_BAD)
             delta_txt = (f"+{cnt_delta}" if cnt_delta >= 0 else str(cnt_delta))
-            c.create_text(x + bw + 120, y + 12, text=delta_txt,
+            c.create_text(x + bw + 130, y + 12, text=delta_txt,
                           fill=cnt_dcol, font=_FONT_MONO_SM, anchor="w")
-
-            # ── ritmo actual (pequeño, discreto) ─────────────────────
-            c.create_text(x + bw + 185, y + 12, text=fmt_rate(rate),
-                          fill=_lighten(col, -30), font=_FONT_MONO_SM, anchor="w")
 
             y += bh + 6
 
@@ -494,7 +485,7 @@ class CanvasRenderer:
             c.create_line(x, y, x + TW, y, fill=COL_LINE, width=1)
             y += 3
 
-        t_sim  = max(1.0, snap.t)
+        t_sim  = max(1.0, snap.t)   # snap.t ya es segundos enteros desde t=0
         m0121  = [(sid, idx, tc, bc, cc)
                   for sid, idx, tc, bc, cc, po in snap.station_production if not po]
         m22    = [(sid, idx, tc, bc, cc)
@@ -510,7 +501,7 @@ class CanvasRenderer:
         teo_paq_pm    = teo_cub_pm * _MEAN_PKG_PER_CYCLE
         teo_tot_pm    = teo_cub_pm + teo_paq_pm
 
-        pra_ciclo_avg = t_sim * n21 / max(1, total_cycles_21)
+        pra_ciclo_avg = t_sim * n21 / total_cycles_21 if total_cycles_21 > 0 else 0.0
         pra_cub_pm    = total_totes_21 / t_sim * 3600 / n21
         pra_paq_pm    = total_boxes_21 / t_sim * 3600 / n21
         pra_tot_pm    = pra_cub_pm + pra_paq_pm
@@ -529,7 +520,7 @@ class CanvasRenderer:
                   pra_ciclo_avg, pra_cub_pm, pra_paq_pm, pra_tot_pm)
 
         # Fila 2: Σ M01-M21  (no negrita)
-        _draw_row("Σ M01-M21", COLOR_TEXT_PRIMARY, fnt_sm,
+        _draw_row("Σ M01-M21", COLOR_TEXT_SECONDARY, fnt_sm,
                   teo_ciclo_avg, sub_t_cub, sub_t_paq, sub_t_tot,
                   pra_ciclo_avg, sub_p_cub, sub_p_paq, sub_p_tot)
 
@@ -537,9 +528,10 @@ class CanvasRenderer:
         tc22 = bc22 = cc22 = 0
         if m22:
             _, _, tc22, bc22, cc22 = m22[0]
+            m22_ciclo_pra = t_sim / cc22 if cc22 > 0 else 0.0
             _draw_row("M22", COLOR_TEXT_SECONDARY, fnt_sm,
                       M22_CYCLE_MEAN_S, 0.0, M22_PKG_H, M22_PKG_H,
-                      t_sim / max(1, cc22), 0.0,
+                      m22_ciclo_pra, 0.0,
                       bc22 / t_sim * 3600, bc22 / t_sim * 3600,
                       show_cub=False)
 
@@ -552,7 +544,7 @@ class CanvasRenderer:
         tot_p_tot = tot_p_cub + tot_p_paq
         tot_cycles_all = total_cycles_21 + cc22
         n_all = n21 + len(m22)
-        pra_ciclo_tot = t_sim * n_all / max(1, tot_cycles_all)
+        pra_ciclo_tot = t_sim * n_all / tot_cycles_all if tot_cycles_all > 0 else 0.0
         _draw_row("TOTAL", COLOR_TEXT_PRIMARY, fnt_bold,
                   SIM_MEAN_CYCLE_S, tot_t_cub, tot_t_paq, tot_t_tot,
                   pra_ciclo_tot, tot_p_cub, tot_p_paq, tot_p_tot,
@@ -599,6 +591,56 @@ class CanvasRenderer:
                 c.create_text(cx + 34, cy, text=_fmt_hms(acc_s), fill=acc_col,              font=_FONT_LABEL_SM, anchor="nw")
                 cy += row_h
 
+
+    def update_bar(self, bar_canvas, time_label, snap):
+        """Actualiza la barra de progreso tkinter externa (fuera del canvas principal)."""
+        w = bar_canvas.winfo_width()
+        h = bar_canvas.winfo_height()
+        if w < 2:
+            return
+        _COL_WARMUP_ZONE = "#1E1A2E"
+        _COL_WARMUP_PROG = "#6B5B95"
+        _COL_WARMUP_LINE = "#8B7BB5"
+        _COL_BAR_NORMAL  = "#546E7A"
+        prog = snap.t / max(1, self.duration_s)
+        bar_canvas.delete("all")
+        # fondo
+        bar_canvas.create_rectangle(0, 0, w, h, fill="#252830", outline="")
+        # zona calentamiento
+        if self.warmup_s > 0:
+            wfrac   = self.warmup_s / max(1, self.duration_s)
+            wpx     = int(w * wfrac)
+            bar_canvas.create_rectangle(0, 0, wpx, h, fill=_COL_WARMUP_ZONE, outline="")
+        # progreso
+        fill_col = _COL_WARMUP_PROG if snap.in_warmup else _COL_BAR_NORMAL
+        bar_canvas.create_rectangle(0, 0, int(w * prog), h, fill=fill_col, outline="")
+        # marcador
+        if self.warmup_s > 0:
+            wfrac = self.warmup_s / max(1, self.duration_s)
+            mx    = int(w * wfrac)
+            bar_canvas.create_line(mx, 0, mx, h, fill=_COL_WARMUP_LINE, width=2)
+        # leyenda Paquete/Cubeta (derecha de la barra)
+        sw, sh = 10, 8
+        sy = (h - sh) // 2
+        # Cubeta (naranja)
+        cx = w - 8
+        bar_canvas.create_rectangle(cx - sw, sy, cx, sy + sh,
+                                    fill=COLOR_TOTE, outline="")
+        bar_canvas.create_text(cx - sw - 4, h // 2, text="Cubeta",
+                               fill="#9AA0AA", font=("Consolas", 8), anchor="e")
+        # Paquete (azul)
+        cx2 = cx - sw - 4 - 52
+        bar_canvas.create_rectangle(cx2 - sw, sy, cx2, sy + sh,
+                                    fill=COLOR_BOX, outline="")
+        bar_canvas.create_text(cx2 - sw - 4, h // 2, text="Paquete",
+                               fill="#9AA0AA", font=("Consolas", 8), anchor="e")
+
+        # texto de tiempo en el label
+        t_prod = max(0.0, snap.t - self.warmup_s)
+        txt = (f"{fmt_time_min(snap.t)} / {fmt_time_min(self.duration_s)}"
+               f"   medicion: {fmt_time_min(t_prod)}"
+               f"   mesas={len(self.stations)}")
+        time_label.config(text=txt)
 
     def _draw_footer(self, snap):
         c = self.canvas

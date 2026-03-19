@@ -35,7 +35,7 @@ class Engine:
         self,
         stations: int,
         duration_s: float,
-        seed: int,
+        seed: int | None,
         start_at_s: float,
         start_stagger_s: float,
         cycle_mean_s: float,
@@ -51,6 +51,18 @@ class Engine:
         target_totes_h: float = TARGET_TOTES_H,
         warmup_s: float = 0.0,
     ):
+        # Fijar semilla concreta (para poder recrear el engine idéntico)
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        self._init_kwargs = dict(
+            stations=stations, duration_s=duration_s, seed=seed,
+            start_at_s=start_at_s, start_stagger_s=start_stagger_s,
+            cycle_mean_s=cycle_mean_s, cycle_sd_s=cycle_sd_s,
+            cycle_min_s=cycle_min_s, cycle_max_s=cycle_max_s,
+            p2=p2, p3=p3, box_sd_m=box_sd_m, push_enabled=push_enabled,
+            target_total_h=target_total_h, target_boxes_h=target_boxes_h,
+            target_totes_h=target_totes_h, warmup_s=warmup_s,
+        )
         self.n               = int(stations)
         self.duration_s      = float(duration_s)
         self.rng             = random.Random(seed)
@@ -197,6 +209,10 @@ class Engine:
         st.cycle_T             = T
         st.current_cycle_times = []
 
+    def fresh(self) -> "Engine":
+        """Devuelve un Engine nuevo con los mismos parámetros y semilla."""
+        return Engine(**self._init_kwargs)
+
     def step(self, n_steps):
         for _ in range(n_steps):
             if self.t >= self.duration_s:
@@ -266,7 +282,7 @@ class Engine:
                                 self.inserted_total += 1
                                 self.inserted_totes += 1
                                 self._insert_window.append((t, "tote"))
-                            self.events.append([t, idx, 1, float(TOTE_LEN_M), 0])
+                            self.events.append([t, idx, 1, float(TOTE_LEN_M), insert_x])
                             st.tote_ready_t    = -1.0
                             st.tote_prep_start = -1.0
                             st.tote_wait_start = -1.0
@@ -307,7 +323,7 @@ class Engine:
                                 if st.packages_only:
                                     self.inserted_boxes_m22 += 1
                                 self._insert_window.append((t, "box"))
-                            self.events.append([t, idx, 0, float(length), 0])
+                            self.events.append([t, idx, 0, float(length), insert_x])
                             st.box_next_try_t = t + RETRY_CHECK_S
                             if st.box_queue:
                                 st.box_prep_start      = t
@@ -326,19 +342,21 @@ class Engine:
                             any_blocked       = True
                             st.box_next_try_t = t + RETRY_CHECK_S
 
-                # ESPERAS: solo cuando el operario ha acabado de preparar todo
-                # (último ítem ha llegado a su ready_t) y le queda al menos 1 bulto
-                # pendiente de inducir — es cuando no puede coger la siguiente cubeta.
-                last_item_ready_t = st.cycle_start_t + 0.90 * st.cycle_T
-                if st.tote_ready_t >= 0:
-                    last_item_ready_t = max(last_item_ready_t, st.tote_ready_t)
-                if st.box_queue:
-                    last_item_ready_t = max(last_item_ready_t, max(st.box_queue))
-                items_pending = st.tote_ready_t >= 0 or bool(st.box_queue)
-                if t >= last_item_ready_t and items_pending:
-                    st.record_block_start(t)
-                else:
+                # ESPERAS: solo post-warmup y solo cuando el operario ha acabado
+                # de preparar todo y le queda al menos 1 bulto pendiente de inducir.
+                if not past_warmup:
                     st.record_block_end(t)
+                else:
+                    last_item_ready_t = st.cycle_start_t + 0.90 * st.cycle_T
+                    if st.tote_ready_t >= 0:
+                        last_item_ready_t = max(last_item_ready_t, st.tote_ready_t)
+                    if st.box_queue:
+                        last_item_ready_t = max(last_item_ready_t, max(st.box_queue))
+                    items_pending = st.tote_ready_t >= 0 or bool(st.box_queue)
+                    if t >= last_item_ready_t and items_pending:
+                        st.record_block_start(t)
+                    else:
+                        st.record_block_end(t)
 
             self.t += DT_S
 
