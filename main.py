@@ -30,7 +30,7 @@ if getattr(sys, "frozen", False):
 from simtimeind.core.constants import (
     EXE_STATIONS, EXE_SPEED, EXE_DURATION_S, EXE_SEED, EXE_VIEW, EXE_RECORD_PATH,
     START_AT_S, START_STAGGER_S,
-    CYCLE_MEAN_S, CYCLE_SD_S, CYCLE_MIN_S, CYCLE_MAX_S,
+    CYCLE_MEAN_M01_M07_S, CYCLE_SD_S, CYCLE_MIN_S, CYCLE_MAX_S,
     P2_DEFAULT, P3_DEFAULT, BOX_SD_M_DEFAULT,
     PUSH_ENABLED_DEFAULT,
     TARGET_TOTAL_H, TARGET_BOXES_H, TARGET_TOTES_H,
@@ -112,7 +112,7 @@ def main() -> None:
         eng = Engine(
             stations=EXE_STATIONS, duration_s=EXE_DURATION_S, seed=EXE_SEED,
             start_at_s=START_AT_S, start_stagger_s=START_STAGGER_S,
-            cycle_mean_s=CYCLE_MEAN_S, cycle_sd_s=CYCLE_SD_S,
+            cycle_mean_s=CYCLE_MEAN_M01_M07_S, cycle_sd_s=CYCLE_SD_S,
             cycle_min_s=CYCLE_MIN_S,  cycle_max_s=CYCLE_MAX_S,
             p2=P2_DEFAULT, p3=P3_DEFAULT,
             push_enabled=PUSH_ENABLED_DEFAULT,
@@ -141,7 +141,7 @@ def main() -> None:
     ap.add_argument("--start_at",      type=float, default=START_AT_S)
     ap.add_argument("--start_stagger", type=float, default=START_STAGGER_S)
 
-    ap.add_argument("--cycle_mean",    type=float, default=CYCLE_MEAN_S)
+    ap.add_argument("--cycle_mean",    type=float, default=CYCLE_MEAN_M01_M07_S)
     ap.add_argument("--cycle_sd",      type=float, default=CYCLE_SD_S)
     ap.add_argument("--cycle_min",     type=float, default=CYCLE_MIN_S)
     ap.add_argument("--cycle_max",     type=float, default=CYCLE_MAX_S)

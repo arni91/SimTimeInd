@@ -3,6 +3,7 @@ from __future__ import annotations
 from .constants import (
     DX_WITHIN_PAIR_M, DX_BETWEEN_PAIRS_M,
     DX_GAP_M6_M7, DX_GAP_M16_M17, DX_GAP_M18_M19,
+    INSERT_HALF_RANGE_M,
 )
 
 _SPECIAL_GAPS: dict[int, float] = {
@@ -41,7 +42,7 @@ def can_insert(items: list, x: float, length: float, gap: float) -> bool:
 
 
 def find_best_insert_x(items: list, x_center: float, length: float,
-                        gap: float, half_range: float = 0.50) -> float | None:
+                        gap: float, half_range: float = INSERT_HALF_RANGE_M) -> float | None:
     """
     Busca el punto óptimo de inducción (front_x) dentro del rango
     [x_center - half_range,  x_center + half_range].
@@ -75,8 +76,8 @@ def find_best_insert_x(items: list, x_center: float, length: float,
     # Candidatos: punto ideal + puntos óptimos junto a cada item vecino
     candidates: list[float] = [fx_ideal]
     for it in relevant:
-        candidates.append(it.front_x + gap + length)  # justo detrás del item
-        candidates.append(it.rear_x  - gap)            # justo delante del item
+        candidates.append(it.front_x + gap + length)    # justo detrás del item
+        candidates.append(it.rear_x  - gap)             # justo delante del item
 
     best_x: float | None = None
     best_score = -1e18
@@ -92,7 +93,7 @@ def find_best_insert_x(items: list, x_center: float, length: float,
              for it in relevant),
             default=half_range,
         )
-        score = min_dist - abs(fx - fx_ideal) * 0.01
+        score = min_dist - abs(fx - fx_ideal) * 0.05
 
         if best_x is None or score > best_score:
             best_x = fx

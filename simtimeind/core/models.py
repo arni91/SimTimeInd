@@ -17,6 +17,7 @@ class Item:
 class Station:
     sid: str
     x: float
+    idx: int = 0          # índice 0-based (M01=0 … M22=21)
 
     start_at: float = 5.0
     started: bool   = False
@@ -31,12 +32,19 @@ class Station:
     # inicio de preparación de la cubeta (cuando el operario empieza a trabajar en ella)
     tote_prep_start: float = -1.0
 
+    # ── buffer de 2 cubetas ───────────────────────────────────────
+    tote_queue_extra: list  = field(default_factory=list)   # buffer slot 2 (cubeta ciclo N+1)
+    last_pkg_sched_t: float = -1.0   # t cuando el último paquete del ciclo está preparado
+
     # ── paquetes: cola independiente ─────────────────────────────
     box_queue: list        = field(default_factory=list)  # [ready_t, ...]
     box_next_try_t: float  = 0.0
     # prep timer del paquete actual: (prep_start_t, ready_t)
     box_prep_start: float  = -1.0   # cuando el operario empieza a preparar este paquete
     box_current_ready_t: float = -1.0  # cuando estará listo para inducir
+
+    # ── modo especial ────────────────────────────────────────────
+    packages_only: bool     = False   # True → solo paquetes (sin cubeta), p.ej. M22
 
     # ── bloqueos para stats ──────────────────────────────────────
     blocked_since: float    = -1.0
@@ -57,6 +65,31 @@ class Station:
 
     current_cycle_times: list = field(default_factory=list)
 
+    # ── métodos de ciclo ─────────────────────────────────────────
+    def commit_cycle_stats(self) -> float:
+        """Registra las estadísticas del ciclo completado. Devuelve la duración."""
+        T = float(self.cycle_T)
+        self.cycle_count += 1
+        self.cycle_sum_s += T
+        self.cycle_min_s  = min(self.cycle_min_s, T)
+        self.cycle_max_s  = max(self.cycle_max_s, T)
+        return T
+
+    def record_block_start(self, t: float) -> None:
+        if self.blocked_since < 0:
+            self.blocked_since = t
+
+    def record_block_end(self, t: float) -> None:
+        if self.blocked_since >= 0:
+            self.blocked_intervals.append((self.blocked_since, t))
+            self.blocked_since = -1.0
+
+    def accumulated_wait_s(self, t_now: float) -> float:
+        acc = sum(max(0.0, b - a) for a, b in self.blocked_intervals)
+        if self.blocked_since >= 0:
+            acc += max(0.0, t_now - self.blocked_since)
+        return acc
+
 
 @dataclass
 class SimSnapshot:
@@ -74,10 +107,10 @@ class SimSnapshot:
     wait_total_s: float
     wait_per_station: list
 
-    # [(sid, wait_now_s, tote_prep_s, box_prep_s), ...]
-    # wait_now_s  : segundos esperando hueco actualmente (0 si no espera)
-    # tote_prep_s : segundos que lleva preparando/esperando inducir la cubeta (-1 si ninguna)
-    # box_prep_s  : segundos que lleva preparando/esperando inducir el paquete actual (-1 si ninguno)
+    # [(sid, wait_now_s, tote_prep_s, box_prep_s, tote_wait_s, extra_prep_s, extra_boxes), ...]
+    # tote_prep_s  : slot 1 - segundos preparando/esperando inducir cubeta (-1 si ninguna)
+    # extra_prep_s : slot 2 - segundos preparando cubeta buffer (-1 si no hay)
+    # extra_boxes  : paquetes del ciclo N+1 ya listos en cola (pendientes de inducir)
     station_timers: list = field(default_factory=list)
 
     mean_tote_s: float = 0.0
@@ -93,3 +126,14 @@ class SimSnapshot:
     counted_boxes_h: float = 0.0
     counted_totes_h: float = 0.0
     counter_x_m: float     = 0.0
+
+    # tasa por ventana deslizante (últimos 60s)
+    rate_window_total_h: float = 0.0
+    rate_window_boxes_h: float = 0.0
+    rate_window_totes_h: float = 0.0
+
+    # boxes insertados solo por M22 (para separar su tasa de M01-M21)
+    inserted_boxes_m22: int    = 0
+
+    # producción por estación: [(sid, idx, tote_count, box_count, cycle_count, packages_only)]
+    station_production: list   = field(default_factory=list)

@@ -36,7 +36,7 @@ class LiveWindow:
         if view == "tail":
             self.view_start = max(0.0, engine.last_x - 18.0)
         else:
-            self.view_start = 0.0
+            self.view_start = -2.0   # 2m de cinta visibles antes de M01
 
         self.view_end = engine.belt_end_m
         self.scale = (CANVAS_W - 120) / max(1e-9, self.view_end - self.view_start)
@@ -44,16 +44,37 @@ class LiveWindow:
         self.root = tk.Tk()
         self.root.title(f"SimTimeInd - {engine.n} mesas - {speed}x")
         self.root.configure(bg=COLOR_BG)
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
+        self.root.geometry(f"{CANVAS_W}x{CANVAS_H + 40}")
+
+        # ── Canvas con scrollbars ──────────────────────────────────────
+        canvas_frame = tk.Frame(self.root, bg=COLOR_BG)
+        canvas_frame.pack(fill="both", expand=True)
+
+        hbar = tk.Scrollbar(canvas_frame, orient="horizontal")
+        vbar = tk.Scrollbar(canvas_frame, orient="vertical")
+        hbar.pack(side="bottom", fill="x")
+        vbar.pack(side="right",  fill="y")
 
         self.canvas = tk.Canvas(
-            self.root,
+            canvas_frame,
             width=CANVAS_W,
             height=CANVAS_H,
             bg=COLOR_BG,
             highlightthickness=0,
+            xscrollcommand=hbar.set,
+            yscrollcommand=vbar.set,
         )
-        self.canvas.pack()
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.configure(scrollregion=(0, 0, CANVAS_W, CANVAS_H))
+        hbar.config(command=self.canvas.xview)
+        vbar.config(command=self.canvas.yview)
+
+        # Zoom con Ctrl+rueda del ratón
+        self._zoom = 1.0
+        self.canvas.bind("<Control-MouseWheel>", self._on_zoom)
+        # Scroll vertical con rueda (sin Ctrl)
+        self.canvas.bind("<MouseWheel>", self._on_scroll_v)
 
         ctrl = tk.Frame(self.root, bg=COLOR_PANEL_BG, height=34)
         ctrl.pack(fill="x")
@@ -130,7 +151,19 @@ class LiveWindow:
         self._paused = False
         self._tick_n = 0
         self._last_snap_t = -1.0
+        self._last_counter_t = -1.0
         self._display_snap: SimSnapshot | None = None
+        self._counter_snap: SimSnapshot | None = None
+
+    def _on_zoom(self, event) -> None:
+        factor = 1.1 if event.delta > 0 else (1.0 / 1.1)
+        self._zoom = max(0.3, min(4.0, self._zoom * factor))
+        w = int(CANVAS_W * self._zoom)
+        h = int(CANVAS_H * self._zoom)
+        self.canvas.configure(scrollregion=(0, 0, w, h))
+
+    def _on_scroll_v(self, event) -> None:
+        self.canvas.yview_scroll(int(-event.delta / 120), "units")
 
     def _toggle_pause(self) -> None:
         self._paused = not self._paused
@@ -160,7 +193,10 @@ class LiveWindow:
         self._last = now
 
         if not self._paused:
-            self.speed = self._read_speed()
+            new_speed = self._read_speed()
+            if new_speed < self.speed and self._acc > 1.0:
+                self._acc = 0.0   # descarta cola acumulada al bajar velocidad
+            self.speed = new_speed
             self._acc += real_dt * self.speed
             steps = min(int(self._acc / DT_S), 150)
             if steps > 0:
@@ -170,12 +206,22 @@ class LiveWindow:
         snap = self.eng.snapshot()
         self._tick_n += 1
 
+        # contador: tiempo real (cada 1s simulado)
+        if self._counter_snap is None or (snap.t - self._last_counter_t) >= 1.0:
+            self._counter_snap = snap
+            self._last_counter_t = snap.t
+
+        # producción: cada 1s simulado
         if self._display_snap is None or (snap.t - self._last_snap_t) >= 1.0:
             self._display_snap = snap
             self._last_snap_t = snap.t
 
-        display_snap = self._display_snap if self._display_snap is not None else snap
-        self.renderer.draw(display_snap, self.eng.items, self._tick_n)
+        display_snap  = self._display_snap if self._display_snap  is not None else snap
+        counter_snap  = self._counter_snap  if self._counter_snap  is not None else snap
+        self.renderer.draw(display_snap, self.eng.items, self._tick_n,
+                           counter_snap=counter_snap)
+        if self._zoom != 1.0:
+            self.canvas.scale("all", 0, 0, self._zoom, self._zoom)
 
         if self.eng.t >= self.eng.duration_s and self.record_path and not self._saved:
             save_record(self.eng, self.record_path)
