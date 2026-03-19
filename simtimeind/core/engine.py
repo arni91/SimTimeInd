@@ -49,6 +49,7 @@ class Engine:
         target_total_h: float = TARGET_TOTAL_H,
         target_boxes_h: float = TARGET_BOXES_H,
         target_totes_h: float = TARGET_TOTES_H,
+        warmup_s: float = 0.0,
     ):
         self.n               = int(stations)
         self.duration_s      = float(duration_s)
@@ -68,6 +69,7 @@ class Engine:
         self.target_total_h  = float(target_total_h)
         self.target_boxes_h  = float(target_boxes_h)
         self.target_totes_h  = float(target_totes_h)
+        self.warmup_s        = float(warmup_s)
 
         self.station_xs     = build_station_positions(self.n)
         self.last_x         = self.station_xs[-1]
@@ -206,13 +208,16 @@ class Engine:
             for it in self.items:
                 it.front_x += dx
             # detectar ítems que cruzan el punto de conteo en este tick
+            # solo se cuentan después del calentamiento (warmup_s)
+            past_warmup = t >= self.warmup_s
             for it in self.items:
                 if it.front_x >= self.counter_x and (it.front_x - dx) < self.counter_x:
-                    if self.counter_first_t < 0:
-                        self.counter_first_t = self.t
-                    self.counted_total += 1
-                    if it.kind == "box":  self.counted_boxes += 1
-                    else:                 self.counted_totes += 1
+                    if past_warmup:
+                        if self.counter_first_t < 0:
+                            self.counter_first_t = self.t
+                        self.counted_total += 1
+                        if it.kind == "box":  self.counted_boxes += 1
+                        else:                 self.counted_totes += 1
             self.items = [it for it in self.items if it.rear_x <= self.belt_end_m]
 
             for st in self.stations:
@@ -257,9 +262,10 @@ class Engine:
                             st.tote_time_count += 1
                             st.current_cycle_times.append(("tote", item_time))
                             self.items.append(Item("tote", insert_x, TOTE_LEN_M))
-                            self.inserted_total += 1
-                            self.inserted_totes += 1
-                            self._insert_window.append((t, "tote"))
+                            if past_warmup:
+                                self.inserted_total += 1
+                                self.inserted_totes += 1
+                                self._insert_window.append((t, "tote"))
                             self.events.append([t, idx, 1, float(TOTE_LEN_M), 0])
                             st.tote_ready_t    = -1.0
                             st.tote_prep_start = -1.0
@@ -295,11 +301,12 @@ class Engine:
                             st.box_time_count += 1
                             st.current_cycle_times.append(("box", item_time))
                             self.items.append(Item("box", insert_x, length))
-                            self.inserted_total += 1
-                            self.inserted_boxes += 1
-                            if st.packages_only:
-                                self.inserted_boxes_m22 += 1
-                            self._insert_window.append((t, "box"))
+                            if past_warmup:
+                                self.inserted_total += 1
+                                self.inserted_boxes += 1
+                                if st.packages_only:
+                                    self.inserted_boxes_m22 += 1
+                                self._insert_window.append((t, "box"))
                             self.events.append([t, idx, 0, float(length), 0])
                             st.box_next_try_t = t + RETRY_CHECK_S
                             if st.box_queue:
@@ -378,19 +385,22 @@ class Engine:
         rate_win_boxes_h = w_boxes / _RATE_WINDOW_S * 3600.0
         rate_win_totes_h = w_totes / _RATE_WINDOW_S * 3600.0
 
-        # tasa acumulada para el contador (se mantiene para el display del contador)
+        # tiempo efectivo de medición (desde que termina el calentamiento)
+        in_warmup  = self.t < self.warmup_s
+        t_prod     = max(1.0, self.t - self.warmup_s) if not in_warmup else 1.0
+        # tasa acumulada para el contador
         if self.counter_first_t >= 0:
             t_counted = max(1.0, self.t - self.counter_first_t)
         else:
-            t_counted = max(1.0, self.t)
+            t_counted = t_prod
         return SimSnapshot(
             t=self.t,
             inserted_total=self.inserted_total,
             inserted_boxes=self.inserted_boxes,
             inserted_totes=self.inserted_totes,
-            rate_total_h=self.inserted_total / t * 3600.0,
-            rate_boxes_h=self.inserted_boxes / t * 3600.0,
-            rate_totes_h=self.inserted_totes / t * 3600.0,
+            rate_total_h=self.inserted_total / t_prod * 3600.0,
+            rate_boxes_h=self.inserted_boxes / t_prod * 3600.0,
+            rate_totes_h=self.inserted_totes / t_prod * 3600.0,
             cycle_count=cnt,
             cycle_mean_s=mean,
             cycle_min_s=self.cycle_min_total if cnt > 0 else 0.0,
@@ -415,6 +425,8 @@ class Engine:
             station_production=[(st.sid, st.idx, st.tote_time_count,
                                   st.box_time_count, st.cycle_count, st.packages_only)
                                  for st in self.stations],
+            warmup_s=self.warmup_s,
+            in_warmup=in_warmup,
         )
 
     def finalize(self):

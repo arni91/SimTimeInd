@@ -94,10 +94,15 @@ START_STAGGER_S: float = 60         # tiempo entre arranques de operarios (si se
 # ── Defaults EXE (ejecución directa sin argumentos) ─────────────
 EXE_STATIONS: int     = 22
 EXE_SPEED: float      = 1.0
-EXE_DURATION_S: float = 3600.0
+EXE_DURATION_S: float = 3900.0   # 65 min: 5 min calentamiento + 60 min medición
 EXE_SEED: int         = 42
 EXE_VIEW: str         = "full"
 EXE_RECORD_PATH       = None
+
+# ── Calentamiento ────────────────────────────────────────────────
+# Los primeros WARMUP_S segundos la simulación corre pero no cuenta
+# producción. Las métricas empiezan a partir de t = WARMUP_S.
+WARMUP_S: float = 300.0           # 5 min de calentamiento
 
 # ── UI / Visual ─────────────────────────────────────────────────
 CANVAS_W: int  = 1560

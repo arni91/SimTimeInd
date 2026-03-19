@@ -22,6 +22,7 @@ from simtimeind.core.constants import (
     P2_DEFAULT, P3_DEFAULT, BOX_SD_M_DEFAULT,
     PUSH_ENABLED_DEFAULT,
     TARGET_TOTAL_H, TARGET_BOXES_H, TARGET_TOTES_H,
+    WARMUP_S,
     DT_S,
 )
 from simtimeind.core.engine import Engine
@@ -49,6 +50,7 @@ def _engine_default() -> Engine:
         target_total_h  = TARGET_TOTAL_H,
         target_boxes_h  = TARGET_BOXES_H,
         target_totes_h  = TARGET_TOTES_H,
+        warmup_s        = WARMUP_S,
     )
 
 

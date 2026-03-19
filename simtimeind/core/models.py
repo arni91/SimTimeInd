@@ -137,3 +137,7 @@ class SimSnapshot:
 
     # producción por estación: [(sid, idx, tote_count, box_count, cycle_count, packages_only)]
     station_production: list   = field(default_factory=list)
+
+    # calentamiento
+    warmup_s:  float = 0.0    # duración del calentamiento (s)
+    in_warmup: bool  = False  # True mientras t < warmup_s

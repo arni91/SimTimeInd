@@ -142,6 +142,7 @@ class LiveWindow:
             target_boxes_h=engine.target_boxes_h,
             target_totes_h=engine.target_totes_h,
             duration_s=engine.duration_s,
+            warmup_s=engine.warmup_s,
             view_label=view,
         )
 

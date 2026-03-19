@@ -52,7 +52,7 @@ class CanvasRenderer:
 
     def __init__(self, canvas, view_start, view_end, scale, station_list,
                  push_enabled, effective_gap_m, target_total_h, target_boxes_h,
-                 target_totes_h, duration_s, view_label="full"):
+                 target_totes_h, duration_s, warmup_s=0.0, view_label="full"):
         self.canvas       = canvas
         self.view_start   = view_start
         self.view_end     = view_end
@@ -64,6 +64,7 @@ class CanvasRenderer:
         self.tgt_boxes    = target_boxes_h
         self.tgt_totes    = target_totes_h
         self.duration_s   = duration_s
+        self.warmup_s     = warmup_s
         self.view_label   = view_label
         self._tick        = 0
         self._replay_cycle_mean: float = 0.0
@@ -611,13 +612,46 @@ class CanvasRenderer:
         c.create_rectangle(lx + 100, ly, lx + 116, ly + 12, fill=COLOR_TOTE, outline="")
         c.create_text(lx + 122, ly + 6, text="Cubeta",  fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="w")
 
-        c.create_rectangle(bar_x, bar_y, bar_x + bar_w,           bar_y + bar_h, fill="#252830",       outline="")
-        # Barra de tiempo: gris neutro (no azul = paquetes, no naranja = cubetas)
-        c.create_rectangle(bar_x, bar_y, bar_x + int(bar_w * prog), bar_y + bar_h, fill="#546E7A", outline="")
-        c.create_text(bar_x, bar_y - 6,
-                      text=(f"  {fmt_time_min(snap.t)} / {fmt_time_min(self.duration_s)}"
-                            f"   |   mesas={len(self.stations)}   |   vista={self.view_label}"),
-                      fill=COLOR_TEXT_SECONDARY, font=_FONT_MONO_SM, anchor="w")
+        # ── Barra de progreso ────────────────────────────────────────
+        c.create_rectangle(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h,
+                           fill="#252830", outline="")
+
+        # Zona de calentamiento: tono ámbar apagado
+        if self.warmup_s > 0:
+            warmup_frac = self.warmup_s / max(1, self.duration_s)
+            warmup_px   = int(bar_w * warmup_frac)
+            c.create_rectangle(bar_x, bar_y, bar_x + warmup_px, bar_y + bar_h,
+                               fill="#3D2E00", outline="")
+
+        # Progreso actual: gris azulado o ámbar si en calentamiento
+        fill_col = COLOR_TEXT_WARN if snap.in_warmup else "#546E7A"
+        c.create_rectangle(bar_x, bar_y, bar_x + int(bar_w * prog), bar_y + bar_h,
+                           fill=fill_col, outline="")
+
+        # Marcador de inicio de medición
+        if self.warmup_s > 0:
+            warmup_frac = self.warmup_s / max(1, self.duration_s)
+            mx = bar_x + int(bar_w * warmup_frac)
+            c.create_line(mx, bar_y - 5, mx, bar_y + bar_h + 5,
+                          fill=COLOR_TEXT_WARN, width=2)
+            label = "INICIO MEDICION" if not snap.in_warmup else "CALENTAMIENTO"
+            anchor = "ne" if snap.in_warmup else "nw"
+            c.create_text(mx + (4 if not snap.in_warmup else -4), bar_y - 6,
+                          text=label,
+                          fill=COLOR_TEXT_WARN, font=_FONT_SANS_XS, anchor=anchor)
+
+        # Texto de tiempo
+        if snap.in_warmup:
+            tiempo_txt = f"  CALENTAMIENTO  {fmt_time_min(snap.t)} / {fmt_time_min(self.warmup_s)}"
+        else:
+            t_prod = snap.t - self.warmup_s
+            tiempo_txt = (f"  {fmt_time_min(snap.t)} / {fmt_time_min(self.duration_s)}"
+                          f"   |   medicion: {fmt_time_min(t_prod)}"
+                          f"   |   mesas={len(self.stations)}")
+        c.create_text(bar_x, bar_y - 18,
+                      text=tiempo_txt,
+                      fill=COLOR_TEXT_SECONDARY if not snap.in_warmup else COLOR_TEXT_WARN,
+                      font=_FONT_MONO_SM, anchor="w")
 
 
 def _lighten(hex_col, amount):
