@@ -191,67 +191,97 @@ class CanvasRenderer:
         c  = self.canvas
         by = BELT_Y
 
+        # Dimensiones de los recuadros de ítem debajo de cada mesa
+        BW, BH, BGAP = 34, 22, 3   # ancho celda, alto, separación vertical entre boxes
+        BM = 2                      # margen horizontal → recuadro dibujado = BW-2*BM = 30px
+
         wait_map  = {sid: (acc_s, bn, wn)
                      for sid, x, acc_s, bn, wn in snap.wait_per_station}
         timer_map = {sid: (tp, bp, tw, ep, eb)
                      for sid, _w, tp, bp, tw, ep, eb in snap.station_timers}
 
         for i, st in enumerate(self.stations):
-            sid         = st.sid if hasattr(st, "sid") else st["sid"]
-            x_m         = st.x  if hasattr(st, "x")   else float(st["x"])
-            pkg_only    = getattr(st, "packages_only", False)
+            sid      = st.sid if hasattr(st, "sid") else st["sid"]
+            x_m      = st.x  if hasattr(st, "x")   else float(st["x"])
+            pkg_only = getattr(st, "packages_only", False)
             if not self._in_view(x_m):
                 continue
             px   = self._px(x_m)
             pair = i % 2
 
-            acc_s, blocked_now, wait_now_s                       = wait_map.get(sid,  (0.0, False, 0.0))
-            tote_prep_s, box_prep_s, tote_wait_s, extra_prep_s, extra_boxes = timer_map.get(sid, (-1.0, -1.0, -1.0, -1.0, 0))
+            acc_s, blocked_now, wait_now_s = wait_map.get(sid, (0.0, False, 0.0))
+            tote_prep_s, box_prep_s, tote_wait_s, *_ = timer_map.get(sid, (-1.0, -1.0, -1.0, -1.0, 0))
 
-            # Visual blocking: usa tote_wait_s (independiente del buffer/ESPERAS)
-            visual_wait = tote_wait_s if tote_wait_s >= 0 else (wait_now_s if blocked_now else 0.0)
-            if visual_wait >= WAIT_BLOCKED_THRESHOLD_S:
-                col_line = COLOR_STATION_CRIT
-                col_text = COLOR_STATION_CRIT
-            else:
-                col_line = COLOR_STATION_OK
-                col_text = COLOR_TEXT_SECONDARY
+            is_blocked  = wait_now_s >= WAIT_BLOCKED_THRESHOLD_S
+            col_line    = COLOR_STATION_CRIT if is_blocked else COLOR_STATION_OK
+            col_text    = COLOR_STATION_CRIT if is_blocked else COLOR_TEXT_SECONDARY
+            lw          = 3 if is_blocked else 2
 
-            lw = 3 if visual_wait >= _ACTIVE_WAIT_THRESHOLD_S else 2
+            # ── Línea vertical de la mesa (cuerpo gris) ──────────────
             c.create_line(px, by - 52, px, by + 52, fill=col_line, width=lw)
             c.create_oval(px - 5, by - 5, px + 5, by + 5, fill=col_line, outline="")
-            c.create_text(px, by - (68 + pair * 16), text=sid,
+
+            # ── Etiqueta de mesa (posición original) ─────────────────
+            label_y = by - (68 + pair * 16)
+            c.create_text(px, label_y, text=sid,
                           fill=col_text, font=_FONT_LABEL_MD, anchor="center")
             if pkg_only:
-                c.create_text(px, by - (68 + pair * 16) - 13,
-                              text="solo P", fill=COLOR_BOX,
+                c.create_text(px, label_y - 13, text="solo P", fill=COLOR_BOX,
                               font=("Helvetica", 7, "bold"), anchor="center")
 
-            # ── Etiquetas verticales bajo cada mesa ──────────────────
-            vy  = by + 58   # start below station line (line ends at by+52)
-            LH  = 11        # line height
-            fv  = ("Consolas", 7)
+            # ── Offset horizontal para no solapar mesas contiguas ────
+            # Si la mesa de la izquierda está a <1.5m → desplazar a la derecha
+            # Si la mesa de la derecha está a <1.5m  → desplazar a la izquierda
+            CLOSE = 1.5   # m — umbral de "mesas contiguas"
+            SHIFT = 6     # px — desplazamiento lateral
+            box_off = 0
+            if i > 0:
+                xp = self.stations[i-1].x if hasattr(self.stations[i-1], "x") else float(self.stations[i-1]["x"])
+                if x_m - xp < CLOSE:
+                    box_off += SHIFT
+            if i < len(self.stations) - 1:
+                xn = self.stations[i+1].x if hasattr(self.stations[i+1], "x") else float(self.stations[i+1]["x"])
+                if xn - x_m < CLOSE:
+                    box_off -= SHIFT
 
-            def _vl(txt, col):
-                nonlocal vy
-                c.create_text(px, vy, text=txt, fill=col, font=fv, anchor="n")
-                vy += LH
+            # ── Recuadros de ítem DEBAJO del cinturón ────────────────
+            slot = [0]
 
-            # Slot 1: cubeta
-            if tote_prep_s >= 0:
-                if tote_wait_s >= _WAIT_SHOW_S:
-                    _vl(f"C:{tote_wait_s:.0f}s", COLOR_TEXT_BAD)
-                else:
-                    _vl(f"C:{tote_prep_s:.0f}s", COLOR_KPI_TOTE)
-            # Slot 1: paquete
-            if box_prep_s >= 0:
-                _vl(f"P:{box_prep_s:.0f}s", COLOR_BOX)
-            # Slot 2: cubeta buffer
-            if extra_prep_s >= 0:
-                _vl(f"C2:{extra_prep_s:.0f}s", COLOR_KPI_TOTE)
-            # Slot 2: paquetes extra pendientes
-            for _ in range(extra_boxes):
-                _vl("P+", COLOR_BOX)
+            def _item_box(timer_s, fill_col, text_col="#FFFFFF", label="",
+                          _px=px, _off=box_off):
+                s = slot[0]
+                cx  = _px + _off
+                bx0 = cx - (BW - 2 * BM) // 2
+                by0 = by + 57 + s * (BH + BGAP)
+                by1 = by0 + BH
+                c.create_rectangle(bx0, by0, bx0 + BW - 2 * BM, by1,
+                                   fill=fill_col, outline="#111418", width=1)
+                txt = f"{label}{timer_s:.0f}s" if timer_s >= 0 else label
+                c.create_text(cx, (by0 + by1) // 2, text=txt,
+                              fill=text_col, font=_FONT_TIMER, anchor="center")
+                slot[0] += 1
+
+            if not pkg_only:
+                # Recuadro de CUBETA: naranja normal, rojo si bloqueada
+                if tote_prep_s >= 0:
+                    if is_blocked:
+                        _item_box(wait_now_s, COLOR_STATION_CRIT, "#FFFFFF")
+                    else:
+                        _item_box(tote_prep_s, COLOR_TOTE, "#1A1D23")
+
+                # Recuadro de PAQUETE (solo si hay un paquete más reciente que la cubeta)
+                if box_prep_s >= 0:
+                    if is_blocked:
+                        _item_box(wait_now_s, COLOR_STATION_CRIT, "#FFFFFF")
+                    else:
+                        _item_box(box_prep_s, COLOR_BOX, "#FFFFFF")
+            else:
+                # M22: solo paquetes, recuadro azul
+                if tote_prep_s >= 0:
+                    if is_blocked:
+                        _item_box(wait_now_s, COLOR_STATION_CRIT, "#FFFFFF")
+                    else:
+                        _item_box(tote_prep_s, COLOR_BOX, "#FFFFFF")
 
     def _draw_motors(self):
         c    = self.canvas
@@ -336,13 +366,21 @@ class CanvasRenderer:
         py, ph, pw = PANEL_Y, PANEL_H, CANVAS_W
         c.create_rectangle(0, py, pw, py + ph, fill=COLOR_PANEL_BG, outline="")
         c.create_line(0, py, pw, py, fill=COLOR_PANEL_BORDER, width=2)
-        col1_x = pw // 3   # 520  PRODUCCION | RENDIMIENTO
-        col3_x = 1120       #      RENDIMIENTO | ESPERAS
-        self._kpi_production(snap, counter_snap, x=40, y=py + 12)
+        col1_x = pw // 3   # ~520  PRODUCCION | RENDIMIENTO
+        col3_x = 1120       #       RENDIMIENTO | ESPERAS
+
+        # Anchos de contenido: PRODUCCIÓN ~380px, RENDIMIENTO ~322px (solo teórico)
+        prod_w = 390
+        rend_w = 322
+        prod_x = (col1_x - prod_w) // 2
+        rend_x = col1_x + (col3_x - col1_x - rend_w) // 2
+        wait_x = col3_x + (pw - col3_x - 400) // 2
+
+        self._kpi_production(snap, counter_snap, x=prod_x, y=py + 12)
         c.create_line(col1_x, py + 10, col1_x, py + ph - 10, fill=COLOR_PANEL_BORDER, width=1)
-        self._kpi_rendimiento(snap, x=col1_x + 30, y=py + 12)
+        self._kpi_rendimiento(snap, x=rend_x, y=py + 12)
         c.create_line(col3_x, py + 10, col3_x, py + ph - 10, fill=COLOR_PANEL_BORDER, width=1)
-        self._kpi_waits(snap, x=col3_x + 30, y=py + 12)
+        self._kpi_waits(snap, x=wait_x, y=py + 12)
 
     def _kpi_production(self, snap, counter_snap, x, y):
         c = self.canvas
@@ -411,24 +449,19 @@ class CanvasRenderer:
         COL_LINE  = COLOR_PANEL_BORDER
 
         O_CL  =   0;  O_TC  =  90;  O_TB  = 155;  O_TP  = 215
-        O_TT  = 272;  O_SEP = 320;  O_PC  = 330;  O_PB  = 395
-        O_PP  = 455;  O_PT  = 510
-        TW = O_PT + 45   # table right edge (offset from x)
+        O_TT  = 272
+        TW = O_TT + 50   # table right edge (offset from x)
 
         # ── Título ────────────────────────────────────────────────────
         c.create_text(x, y, text="RENDIMIENTO OPERARIO",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
         y += 14
 
-        # ── Sub-cabeceras TEÓRICO / PRÁCTICO ──────────────────────────
+        # ── Sub-cabecera TEÓRICO ───────────────────────────────────────
         t_ctr = x + (O_TC + O_TT + 40) // 2
-        p_ctr = x + (O_PC + O_PT + 40) // 2
         c.create_text(t_ctr, y, text="TEÓRICO",
                       fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_XS, anchor="n")
-        c.create_text(p_ctr, y, text="PRÁCTICO",
-                      fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_XS, anchor="n")
         y += 14
-        # Raya que va de ciclo(T) hasta tot/h(P)
         c.create_line(x + O_TC, y, x + TW, y, fill=COL_LINE, width=1)
         y += 3
 
@@ -438,13 +471,11 @@ class CanvasRenderer:
         for col, hdr, clr in [
             (O_TC, "ciclo", COL_CICLO), (O_TB, "cub/h", COL_CUB),
             (O_TP, "paq/h", COL_PAQ),  (O_TT, "tot/h", COL_TOT),
-            (O_PC, "ciclo", COL_CICLO), (O_PB, "cub/h", COL_CUB),
-            (O_PP, "paq/h", COL_PAQ),  (O_PT, "tot/h", COL_TOT),
         ]:
             c.create_text(x + col, y, text=hdr, fill=clr,
                           font=_FONT_SANS_XS, anchor="nw")
         y += 12
-        c.create_line(x, y, x + TW, y, fill=COL_LINE, width=1)   # top border
+        c.create_line(x, y, x + TW, y, fill=COL_LINE, width=1)
         y += 3
 
         def _teo_ciclo(idx):
@@ -456,16 +487,12 @@ class CanvasRenderer:
 
         def _draw_row(label, lbl_clr, lbl_fnt,
                       teo_c, teo_b, teo_p, teo_t,
-                      pra_c, pra_b, pra_p, pra_t,
                       show_cub=True, d_fnt=None):
             nonlocal y
             if d_fnt is None:
                 d_fnt = ("Consolas", 9)
             mid = y + RH // 2
             c.create_text(x + O_CL, mid, text=label, fill=lbl_clr, font=lbl_fnt, anchor="w")
-            # separador vertical TEÓRICO | PRÁCTICO
-            c.create_line(x + O_SEP, y, x + O_SEP, y + RH, fill=COL_LINE, width=1)
-            # TEÓRICO
             c.create_text(x + O_TC, mid, text=f"{teo_c:.1f}s", fill=COL_CICLO, font=d_fnt, anchor="w")
             c.create_text(x + O_TB, mid,
                           text="—" if not show_cub else f"{teo_b:.0f}",
@@ -473,42 +500,23 @@ class CanvasRenderer:
                           font=d_fnt, anchor="w")
             c.create_text(x + O_TP, mid, text=f"{teo_p:.0f}", fill=COL_PAQ, font=d_fnt, anchor="w")
             c.create_text(x + O_TT, mid, text=f"{teo_t:.0f}", fill=COL_TOT, font=d_fnt, anchor="w")
-            # PRÁCTICO: ciclo siempre blanco (sin código de color)
-            c.create_text(x + O_PC, mid, text=f"{pra_c:.1f}s", fill=COL_CICLO, font=d_fnt, anchor="w")
-            c.create_text(x + O_PB, mid,
-                          text="—" if not show_cub else f"{pra_b:.0f}",
-                          fill=COLOR_TEXT_SECONDARY if not show_cub else COL_CUB,
-                          font=d_fnt, anchor="w")
-            c.create_text(x + O_PP, mid, text=f"{pra_p:.0f}", fill=COL_PAQ, font=d_fnt, anchor="w")
-            c.create_text(x + O_PT, mid, text=f"{pra_t:.0f}", fill=COL_TOT, font=d_fnt, anchor="w")
             y += RH
             c.create_line(x, y, x + TW, y, fill=COL_LINE, width=1)
             y += 3
 
-        t_sim  = max(1.0, snap.t)   # snap.t ya es segundos enteros desde t=0
-        m0121  = [(sid, idx, tc, bc, cc)
-                  for sid, idx, tc, bc, cc, po in snap.station_production if not po]
-        m22    = [(sid, idx, tc, bc, cc)
-                  for sid, idx, tc, bc, cc, po in snap.station_production if po]
+        m0121 = [(sid, idx, tc, bc, cc)
+                 for sid, idx, tc, bc, cc, po in snap.station_production if not po]
+        m22   = [(sid, idx, tc, bc, cc)
+                 for sid, idx, tc, bc, cc, po in snap.station_production if po]
 
         n21 = max(1, len(m0121))
-        total_totes_21  = sum(tc for _, _, tc, _, _  in m0121)
-        total_boxes_21  = sum(bc for _, _, _, bc, _  in m0121)
-        total_cycles_21 = sum(cc for _, _, _, _, cc  in m0121)
 
         teo_ciclo_avg = sum(_teo_ciclo(idx) for _, idx, *_ in m0121) / n21
         teo_cub_pm    = sum(3600.0 / _teo_ciclo(idx) for _, idx, *_ in m0121) / n21
         teo_paq_pm    = teo_cub_pm * _MEAN_PKG_PER_CYCLE
         teo_tot_pm    = teo_cub_pm + teo_paq_pm
 
-        pra_ciclo_avg = t_sim * n21 / total_cycles_21 if total_cycles_21 > 0 else 0.0
-        pra_cub_pm    = total_totes_21 / t_sim * 3600 / n21
-        pra_paq_pm    = total_boxes_21 / t_sim * 3600 / n21
-        pra_tot_pm    = pra_cub_pm + pra_paq_pm
-
         sub_t_cub = teo_cub_pm * n21;  sub_t_paq = teo_paq_pm * n21;  sub_t_tot = teo_tot_pm * n21
-        sub_p_cub = total_totes_21 / t_sim * 3600
-        sub_p_paq = total_boxes_21 / t_sim * 3600;  sub_p_tot = sub_p_cub + sub_p_paq
 
         fnt_sm   = _FONT_SANS_XS
         fnt_bold = ("Helvetica", 9, "bold")
@@ -516,38 +524,24 @@ class CanvasRenderer:
 
         # Fila 1: M01-M21 por mesa
         _draw_row("M01-M21 /mesa", COLOR_TEXT_SECONDARY, fnt_sm,
-                  teo_ciclo_avg, teo_cub_pm, teo_paq_pm, teo_tot_pm,
-                  pra_ciclo_avg, pra_cub_pm, pra_paq_pm, pra_tot_pm)
+                  teo_ciclo_avg, teo_cub_pm, teo_paq_pm, teo_tot_pm)
 
-        # Fila 2: Σ M01-M21  (no negrita)
+        # Fila 2: Σ M01-M21
         _draw_row("Σ M01-M21", COLOR_TEXT_SECONDARY, fnt_sm,
-                  teo_ciclo_avg, sub_t_cub, sub_t_paq, sub_t_tot,
-                  pra_ciclo_avg, sub_p_cub, sub_p_paq, sub_p_tot)
+                  teo_ciclo_avg, sub_t_cub, sub_t_paq, sub_t_tot)
 
         # Fila 3: M22
-        tc22 = bc22 = cc22 = 0
         if m22:
-            _, _, tc22, bc22, cc22 = m22[0]
-            m22_ciclo_pra = t_sim / cc22 if cc22 > 0 else 0.0
             _draw_row("M22", COLOR_TEXT_SECONDARY, fnt_sm,
                       M22_CYCLE_MEAN_S, 0.0, M22_PKG_H, M22_PKG_H,
-                      m22_ciclo_pra, 0.0,
-                      bc22 / t_sim * 3600, bc22 / t_sim * 3600,
                       show_cub=False)
 
         # Fila 4: TOTAL  (negrita)
         tot_t_cub = sub_t_cub
         tot_t_paq = sub_t_paq + M22_PKG_H
         tot_t_tot = tot_t_cub + tot_t_paq
-        tot_p_cub = sub_p_cub
-        tot_p_paq = sub_p_paq + bc22 / t_sim * 3600
-        tot_p_tot = tot_p_cub + tot_p_paq
-        tot_cycles_all = total_cycles_21 + cc22
-        n_all = n21 + len(m22)
-        pra_ciclo_tot = t_sim * n_all / tot_cycles_all if tot_cycles_all > 0 else 0.0
         _draw_row("TOTAL", COLOR_TEXT_PRIMARY, fnt_bold,
                   SIM_MEAN_CYCLE_S, tot_t_cub, tot_t_paq, tot_t_tot,
-                  pra_ciclo_tot, tot_p_cub, tot_p_paq, tot_p_tot,
                   d_fnt=dat_bold)
 
     def _kpi_waits(self, snap, x, y):

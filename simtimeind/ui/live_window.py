@@ -241,17 +241,24 @@ class LiveWindow:
             if 0 <= si < n_st:
                 st_ev_t[si].append(float(e[0]))
                 st_ev_kc[si].append(int(e[2]))
-        # Prefijos de tote/box por estación
-        self._st_ev_t   = st_ev_t
+        # Prefijos de tote/box por estación + tiempos de eventos tote para timers
+        self._st_ev_t      = st_ev_t
         self._st_pref_tote = []
         self._st_pref_box  = []
+        self._st_tote_ev_t = []   # solo tiempos de eventos tote (kc=1) por estación
+        self._st_box_ev_t  = []   # solo tiempos de eventos box  (kc=0) por estación
         for si in range(n_st):
             pt = [0]; pb = [0]
-            for kc in st_ev_kc[si]:
+            tote_t = []; box_t = []
+            for t_ev, kc in zip(st_ev_t[si], st_ev_kc[si]):
                 pt.append(pt[-1] + (1 if kc == 1 else 0))
                 pb.append(pb[-1] + (1 if kc == 0 else 0))
+                if kc == 1: tote_t.append(t_ev)
+                else:       box_t.append(t_ev)
             self._st_pref_tote.append(pt)
             self._st_pref_box.append(pb)
+            self._st_tote_ev_t.append(tote_t)
+            self._st_box_ev_t.append(box_t)
         # Detectar stations packages_only (M22: solo paquetes, sin cubetas)
         self._st_packages_only = [False] * n_st
         if n_st > 0:
@@ -334,7 +341,25 @@ class LiveWindow:
                 if a <= t_s <= b: wait_now = t_s - a
             wait_total += acc
             wait_per.append((st["sid"], st["x"], acc, False, wait_now))
-            station_timers.append((st["sid"], wait_now, -1.0, -1.0, -1.0, -1.0, 0))
+
+            # Timer de ciclo: tiempo desde la última cubeta inductada
+            tote_times = self._st_tote_ev_t[i]
+            box_times  = self._st_box_ev_t[i]
+            idx_tote = bisect.bisect_right(tote_times, t_s) - 1
+            idx_box  = bisect.bisect_right(box_times,  t_s) - 1
+            tote_prep_s  = t_s - tote_times[idx_tote] if idx_tote >= 0 else -1.0
+            box_prep_s   = t_s - box_times[idx_box]   if idx_box  >= 0 else -1.0
+            # Si hay un box más reciente que el tote, mostrar box prep; si no, solo ciclo
+            if tote_prep_s >= 0 and box_prep_s >= 0 and box_prep_s < tote_prep_s:
+                tote_prep_s_show = tote_prep_s
+                box_prep_s_show  = box_prep_s
+            else:
+                tote_prep_s_show = tote_prep_s
+                box_prep_s_show  = -1.0
+
+            station_timers.append((st["sid"], wait_now,
+                                   tote_prep_s_show, box_prep_s_show,
+                                   wait_now, -1.0, 0))
 
         snap = SimSnapshot(
             t=t_floor,

@@ -106,9 +106,9 @@ La UI nunca accede al estado interno de `Engine` durante la reproducción: todo 
 
 | Zona | Mesas | Ciclo medio | Descripción |
 |------|-------|-------------|-------------|
-| Zona 1 | M01–M07 | configurable (default 63 s) | 7 mesas normales |
-| Zona 2 | M08–M14 | configurable (default 63 s) | 7 mesas normales |
-| Zona 3 | M15–M21 | configurable (default 63 s) | 7 mesas normales |
+| Zona 1 | M01–M07 | configurable (default 60 s) | 7 mesas normales |
+| Zona 2 | M08–M14 | configurable (default 60 s) | 7 mesas normales |
+| Zona 3 | M15–M21 | configurable (default 60 s) | 7 mesas normales |
 | M22 | solo paquetes | 22.5 s (160 paq/h) | sin cubeta vacía |
 
 ### ⏱️ Ciclo operario (M01–M21)
@@ -136,7 +136,7 @@ Los primeros **5 minutos** de simulación son de calentamiento: la cinta funcion
 
 ### 📊 Variabilidad del ciclo
 
-Cada operario tiene un ciclo propio muestreado de una distribución normal `N(mean, sd)` truncada en `[min, max]`. Con `sd = 6 s` sobre una media de 63 s, el coeficiente de variación es ~10 %, produciendo resultados distintos en cada ejecución.
+Cada operario tiene un ciclo propio muestreado de una distribución normal `N(mean, sd)` truncada en `[min, max]`. Con `sd = 3 s` sobre una media de 60 s, el coeficiente de variación es ~10 %, produciendo resultados distintos en cada ejecución.
 
 ### 📍 Punto de conteo
 
@@ -217,8 +217,8 @@ python main.py --replay          # abre selector de archivo
 | `--speed` | `1.0` | Multiplicador de velocidad de visualización |
 | `--view` | `full` | `full` = toda la cinta · `tail` = últimas mesas |
 | `--push` / `--no_push` | `push` | Modo de empuje (gap 0 mm / 50 mm) |
-| `--cycle_mean` | `63.0` | Ciclo medio operario en segundos (zonas 1–3) |
-| `--cycle_sd` | `6.0` | Desviación estándar del ciclo en segundos |
+| `--cycle_mean` | `60.0` | Ciclo medio operario en segundos (zonas 1–3) |
+| `--cycle_sd` | `3.0` | Desviación estándar del ciclo en segundos |
 | `--cycle_min` | `30.0` | Ciclo mínimo absoluto en segundos |
 | `--cycle_max` | `120.0` | Ciclo máximo absoluto en segundos |
 | `--p2` | `0.117` | Probabilidad de 2 paquetes por ciclo |

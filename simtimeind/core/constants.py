@@ -19,7 +19,7 @@ DX_GAP_M18_M19: float     = 2.35   # excepcion: distancia entre M18 y M19
 TOTE_LEN_M: float   = 0.600       # longitud cubeta vacía (X)
 TOTE_WIDTH_MM: int  = 400         # ancho cubeta (Y) en mm
 BOX_MEAN_M: float   = 0.179       # media longitud paquete (X)
-BOX_WIDTH_MM: int   = 395         # ancho paquete (Y) en mm — cabe dentro cubeta
+BOX_WIDTH_MM: int   = 400         # ancho paquete (Y) en mm — cabe dentro cubeta
 BOX_SD_M_DEFAULT: float = 0.030
 BOX_MIN_M: float    = 0.100
 BOX_MAX_M: float    = 0.400
@@ -62,21 +62,21 @@ ZONE2_N: int = 7   # número de mesas en zona 2  (M08–M14)
 ZONE3_N: int = 7   # número de mesas en zona 3  (M15–M21)
 
 #   Zona 1: M01–M07
-CYCLE_MEAN_M01_M07_S: float = 62.0                                  # ← ciclo medio (s)
+CYCLE_MEAN_M01_M07_S: float = 60.0                                  # ← ciclo medio (s)
 ZONE1_TOTES_H:        float = 3600.0 / CYCLE_MEAN_M01_M07_S         #   cubetas/h por mesa
 ZONE1_BOXES_H:        float = ZONE1_TOTES_H * _MEAN_PKG_PER_CYCLE   #   paquetes/h por mesa
 ZONE1_TOTAL_TOTES_H:  float = ZONE1_TOTES_H * ZONE1_N               #   cubetas/h zona total
 ZONE1_TOTAL_BOXES_H:  float = ZONE1_BOXES_H  * ZONE1_N              #   paquetes/h zona total
 
 #   Zona 2: M08–M14
-CYCLE_MEAN_M08_M14_S: float = 62.0                                  # ← ciclo medio (s)
+CYCLE_MEAN_M08_M14_S: float = 60.0                                  # ← ciclo medio (s)
 ZONE2_TOTES_H:        float = 3600.0 / CYCLE_MEAN_M08_M14_S
 ZONE2_BOXES_H:        float = ZONE2_TOTES_H * _MEAN_PKG_PER_CYCLE
 ZONE2_TOTAL_TOTES_H:  float = ZONE2_TOTES_H * ZONE2_N
 ZONE2_TOTAL_BOXES_H:  float = ZONE2_BOXES_H  * ZONE2_N
 
 #   Zona 3: M15–M21
-CYCLE_MEAN_M15_M21_S: float = 62.0                                  # ← ciclo medio (s)
+CYCLE_MEAN_M15_M21_S: float = 60.0                                  # ← ciclo medio (s)
 ZONE3_TOTES_H:        float = 3600.0 / CYCLE_MEAN_M15_M21_S
 ZONE3_BOXES_H:        float = ZONE3_TOTES_H * _MEAN_PKG_PER_CYCLE
 ZONE3_TOTAL_TOTES_H:  float = ZONE3_TOTES_H * ZONE3_N
@@ -106,7 +106,7 @@ WARMUP_S: float = 300.0           # 5 min de calentamiento
 
 # ── UI / Visual ─────────────────────────────────────────────────
 CANVAS_W: int  = 1560
-CANVAS_H: int  = 840
+CANVAS_H: int  = 960
 
 # Zona cinta
 BELT_Y: int     = 380                   # Y central de la cinta en píxeles
@@ -115,7 +115,7 @@ TOTE_HALF_H: int      = 18              # cubeta: altura visual
 BOX_HALF_H: int       = 18              # paquete: misma altura que cubeta
 
 # Zona de métricas (panel inferior)
-PANEL_H: int    = 320                   # altura del panel de KPIs bajo la cinta
+PANEL_H: int    = 380                   # altura del panel de KPIs bajo la cinta
 PANEL_Y: int    = CANVAS_H - PANEL_H
 
 # Esperas visibles en cinta
