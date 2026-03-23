@@ -14,7 +14,7 @@ from ..core.constants import (
     COLOR_KPI_TOTE,
     WAIT_BLOCKED_THRESHOLD_S,
     BELT_SPEED_MPM, TOTE_LEN_M, BOX_MEAN_M, BOX_MIN_M, BOX_MAX_M,
-    MOTOR_POSITIONS_M, MOTOR_SPEED_MPM,
+    MOTOR_POSITIONS_M, MOTOR_SPEEDS_MPM,
     CYCLE_MEAN_M01_M07_S, CYCLE_MEAN_M08_M14_S, CYCLE_MEAN_M15_M21_S,
     M22_CYCLE_MEAN_S, M22_PKG_H,
     SIM_MEAN_CYCLE_S, SIM_TOTAL_TOTES_H, SIM_TOTAL_BOXES_H, SIM_TOTAL_H,
@@ -63,10 +63,11 @@ class CanvasRenderer:
         self.tgt_total    = target_total_h
         self.tgt_boxes    = target_boxes_h
         self.tgt_totes    = target_totes_h
-        self.duration_s   = duration_s
-        self.warmup_s     = warmup_s
-        self.view_label   = view_label
-        self._tick        = 0
+        self.duration_s       = duration_s
+        self.warmup_s         = warmup_s
+        self.view_label       = view_label
+        self.motor_speeds_mpm = list(MOTOR_SPEEDS_MPM)
+        self._tick            = 0
         self._replay_cycle_mean: float = 0.0
 
     def _px(self, x_m):
@@ -355,8 +356,9 @@ class CanvasRenderer:
             bx = px - box_w // 2
             c.create_rectangle(bx, box_top, bx + box_w, box_top + box_h,
                                 fill=_COL_MOTOR_BG, outline=col, width=1)
+            spd = self.motor_speeds_mpm[i] if i < len(self.motor_speeds_mpm) else MOTOR_SPEEDS_MPM[0]
             c.create_text(px, box_top + box_h // 2,
-                          text=f"M{num}  {MOTOR_SPEED_MPM:.0f}m/min",
+                          text=f"M{num}  {spd:.0f}m/min",
                           fill=col, font=fnt, anchor="center")
 
     def _draw_dimension_lines(self):

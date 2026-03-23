@@ -241,6 +241,8 @@ class LiveWindow:
         self._warmup_s       = float(meta.get("warmup_s", 0.0))
         self._motor_positions_m = list(meta.get("motor_positions_m", list(MOTOR_POSITIONS_M)))
         self._motor_speeds_mps  = [s / 60.0 for s in meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM))]
+        if hasattr(self, "renderer"):
+            self.renderer.motor_speeds_mpm = list(meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM)))
 
         self._ev_t = [float(e[0]) for e in self._events]
 
