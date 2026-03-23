@@ -1,4 +1,4 @@
-# 🏭 SimTimeInd v3
+# 🏭 SimTimeInd v4
 
 > **Simulador 2D de cinta de inducción con interfaz visual en tiempo real**
 > Desarrollado para análisis de rendimiento operativo en instalaciones de intralogística.
@@ -57,7 +57,7 @@ El simulador permite tres modos de operación:
 El proyecto aplica principios **SOLID** con separación estricta en tres capas:
 
 ```
-SimTimeInd_v3/
+SimTimeInd_v4/
 ├── main.py                       🚀 Punto de entrada — CLI / menú interactivo
 └── simtimeind/
     ├── core/                     🧠 Dominio puro — sin UI ni I/O
@@ -162,12 +162,24 @@ Los ítems se cuentan al cruzar `x = 50.0 m` (~5 m después de M22). Solo se cue
 
 **Zona de cinta** — representación 2D con paquetes (azul) y cubetas (naranja) deslizándose, indicadores de estado por mesa (gris = normal, rojo = bloqueada), posición de motores (líneas teal) y cotas de distancia entre mesas.
 
+**Slots de preparación por mesa** — debajo de cada mesa (M01–M22) se muestran hasta 3 recuadros que representan el estado del ciclo actual en orden secuencial (de arriba a abajo):
+
+| Fila | Elemento | Color | Estado |
+|------|----------|-------|--------|
+| 0 | Cubeta vacía | Naranja | Preparando (contador) → Inducida (OK) |
+| 1 | Paquete 1 | Azul | Aparece solo tras cubeta inducida |
+| 2 | Paquete 2 | Azul | Aparece solo tras paquete 1 inducido |
+| 3 | Bloqueo | Rojo | Solo cuando el ítem listo no puede inducir por falta de hueco |
+
+Los paquetes aparecen estrictamente en orden top→bottom; el contador de bloqueo (fila 3) solo se activa cuando el ítem ya está preparado pero bloqueado por la cinta. En mesas con alta congestión (M20, M21) donde los paquetes pueden inductarse antes que la cubeta, el display muestra la cubeta congelada + bloqueo en lugar de un estado inconsistente.
+
 **Panel KPI inferior** — tres columnas:
 
 | Columna | Contenido |
 |---------|-----------|
 | **PRODUCCIÓN** | Barras de progreso total / paquetes / cubetas vs target; contador de ítems al punto de medición; barra de tiempo con zona warmup (morado) |
 | **RENDIMIENTO OPERARIO** | Tabla TEÓRICO vs PRÁCTICO: M01-M21/mesa · Σ M01-M21 · M22 · TOTAL; valores actualizados cada segundo |
+| **CICLOS COMPLETADOS** | Ciclos post-calentamiento por mesa (M01–M22); valores en blanco sobre fondo oscuro |
 | **ESPERAS** | Tiempo total acumulado, media por mesa, peor mesa, desglose por estación |
 
 **Barra de control** — Play/Pausa, multiplicador de velocidad (0.1×–50×) y slider de tiempo para navegar a cualquier instante de la simulación.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import random
 from collections import deque
+from typing import Any
 
 _RATE_WINDOW_S = 60.0   # ventana deslizante para tasa de producción
 
@@ -20,13 +21,13 @@ from .constants import (
     M22_CYCLE_MEAN_S,
     M22_CYCLE_MIN_S,
     M22_CYCLE_MAX_S,
+    TOTE_PREP_MIN_S,
+    TOTE_PREP_MAX_S,
 )
 from .models import Item, Station, SimSnapshot
 from .belt import build_station_positions, find_best_insert_x
 
-_TOTE_RELEASE_FRAC_MIN = 0.08
-_TOTE_RELEASE_FRAC_MAX = 0.13
-_TOTE_MAX_WAIT_S       = 2.0
+_TOTE_MAX_WAIT_S = 2.0
 
 
 class Engine:
@@ -54,7 +55,7 @@ class Engine:
         # Fijar semilla concreta (para poder recrear el engine idéntico)
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
-        self._init_kwargs = dict(
+        self._init_kwargs: dict[str, Any] = dict(
             stations=stations, duration_s=duration_s, seed=seed,
             start_at_s=start_at_s, start_stagger_s=start_stagger_s,
             cycle_mean_s=cycle_mean_s, cycle_sd_s=cycle_sd_s,
@@ -155,52 +156,66 @@ class Engine:
         t0 = self.t
 
         # ── M22 (packages_only): ciclo corto, sin cubeta ─────────────
-        # El paquete se planifica al 100% del ciclo: la duración del ciclo (T ≈ 22.5s)
-        # dicta directamente la cadencia → tasa ≈ 3600/22.5 = 160 pkg/h sin zona muerta.
         if st.packages_only:
             T = self._sample_cycle_time(M22_CYCLE_MEAN_S,
                                         min_s=M22_CYCLE_MIN_S,
                                         max_s=M22_CYCLE_MAX_S)
-            st.tote_ready_t     = -1.0   # nunca hay cubeta
+            st.tote_ready_t     = -1.0
             st.tote_prep_start  = -1.0
             st.tote_wait_start  = -1.0
             st.tote_next_try_t  = 0.0
-            # 1 paquete listo al final del ciclo (el propio ciclo_T es la cadencia)
             st.box_queue            = [t0 + T]
-            st.box_prep_start       = t0   # el operario empieza a preparar ya
+            st.box_prep_start       = t0
             st.box_current_ready_t  = st.box_queue[0]
             st.box_next_try_t       = 0.0
             st.cycle_start_t        = t0
             st.cycle_T              = T
             st.current_cycle_times  = []
+            # Plan visual (M22: solo 1 slot de paquete)
+            st.plan_tote_start = -1.0;  st.plan_tote_ready = -1.0
+            st.plan_box1_start = t0;    st.plan_box1_ready = t0 + T
+            st.plan_box2_start = -1.0;  st.plan_box2_ready = -1.0
+            st.plan_n_boxes    = 1
             return
 
         # ── ciclo normal (M01–M21) ────────────────────────────────────
-        k  = self._sample_packs_per_tote()
-        # Zona 1: M01–M07 (idx 0–6)  |  Zona 2: M08–M14 (idx 7–13)
-        # Zona 3: M15–M21 (idx 14–20)
+        k = self._sample_packs_per_tote()
         if st.idx >= 14:
             mean_s = CYCLE_MEAN_M15_M21_S
         elif st.idx >= 7:
             mean_s = CYCLE_MEAN_M08_M14_S
         else:
             mean_s = CYCLE_MEAN_M01_M07_S
-        T  = self._sample_cycle_time(mean_s)
+        T = self._sample_cycle_time(mean_s)
 
-        # cubeta: lista entre 8-13% del inicio del ciclo
-        tote_frac          = self.rng.uniform(_TOTE_RELEASE_FRAC_MIN, _TOTE_RELEASE_FRAC_MAX)
+        # ── Cubeta: tiempo absoluto de preparación (6–9 s) ───────────
+        tote_abs           = self.rng.uniform(TOTE_PREP_MIN_S, TOTE_PREP_MAX_S)
+        tote_ready         = t0 + tote_abs
         st.tote_prep_start = t0
-        st.tote_ready_t    = t0 + tote_frac * T
-        st.tote_next_try_t = st.tote_ready_t
+        st.tote_ready_t    = tote_ready
+        st.tote_next_try_t = tote_ready
         st.tote_wait_start = -1.0
 
-        # paquetes: cola fresca para este ciclo
+        # ── Paquetes: temporizadores secuenciales desde tote_ready ────
+        # El tiempo restante del ciclo (T - tote_abs) se reparte equitativamente
+        # entre los paquetes → cada temporizador empieza cuando acaba el anterior.
+        remaining = max(1.0, T - tote_abs)
         st.box_queue = []
-        if k > 0:
-            span = 0.90 - 0.45
-            for i in range(k):
-                frac = 0.45 + (i + 1) * (span / k)
-                st.box_queue.append(t0 + frac * T)
+        if k == 1:
+            box1_ready = tote_ready + remaining
+            st.box_queue = [box1_ready]
+        elif k == 2:
+            half = remaining / 2.0
+            box1_ready = tote_ready + half
+            box2_ready = box1_ready + half
+            st.box_queue = [box1_ready, box2_ready]
+        elif k >= 3:
+            third = remaining / 3.0
+            box1_ready = tote_ready + third
+            box2_ready = box1_ready + third
+            box3_ready = box2_ready + third
+            st.box_queue = [box1_ready, box2_ready, box3_ready]
+
         st.box_prep_start      = -1.0
         st.box_current_ready_t = st.box_queue[0] if st.box_queue else -1.0
         st.box_next_try_t      = 0.0
@@ -209,7 +224,16 @@ class Engine:
         st.cycle_T             = T
         st.current_cycle_times = []
 
-    def fresh(self) -> "Engine":
+        # ── Plan visual (tiempos absolutos de inicio/fin de cada slot) ──
+        st.plan_tote_start = t0
+        st.plan_tote_ready = tote_ready
+        st.plan_box1_start = tote_ready           # box1 empieza cuando tote está listo
+        st.plan_box1_ready = st.box_queue[0] if k >= 1 else -1.0
+        st.plan_box2_start = st.box_queue[0] if k >= 2 else -1.0  # box2 empieza cuando box1 está listo
+        st.plan_box2_ready = st.box_queue[1] if k >= 2 else -1.0
+        st.plan_n_boxes    = k
+
+    def fresh(self) -> Engine:
         """Devuelve un Engine nuevo con los mismos parámetros y semilla."""
         return Engine(**self._init_kwargs)
 
@@ -242,11 +266,11 @@ class Engine:
                         st.started = True
                         self._plan_new_cycle(st)
                     continue
-                # Mesas normales: nuevo ciclo cuando tote inducido, paquetes inducidos, y ciclo_T cumplido
+                # Mesas normales: nuevo ciclo en cuanto se han inducido cubeta + todos los paquetes.
+                # No se espera a que expire cycle_T — cada ciclo tiene su propio tiempo natural.
                 if (not st.packages_only
                         and st.tote_ready_t < 0
-                        and not st.box_queue
-                        and t >= st.cycle_start_t + st.cycle_T):
+                        and not st.box_queue):
                     self._plan_new_cycle(st)
 
             # Últimas mesas primero: tienen el belt más lleno y necesitan prioridad
@@ -342,21 +366,26 @@ class Engine:
                             any_blocked       = True
                             st.box_next_try_t = t + RETRY_CHECK_S
 
-                # ESPERAS: solo post-warmup y solo cuando el operario ha acabado
-                # de preparar todo y le queda al menos 1 bulto pendiente de inducir.
+                # ESPERAS: bloqueo solo cuando TODOS los bultos del ciclo están
+                # preparados y queda al menos 1 pendiente de inducir.
+                # Usamos el último plan_ready del ciclo como señal de "todo listo".
+                if st.packages_only:
+                    all_prepared = (st.plan_box1_ready > 0 and t >= st.plan_box1_ready)
+                else:
+                    if st.plan_n_boxes >= 2:
+                        last_ready = st.plan_box2_ready
+                    elif st.plan_n_boxes >= 1:
+                        last_ready = st.plan_box1_ready
+                    else:
+                        last_ready = st.plan_tote_ready
+                    all_prepared = (last_ready > 0 and t >= last_ready)
+                items_pending = st.tote_ready_t >= 0 or bool(st.box_queue)
                 if not past_warmup:
                     st.record_block_end(t)
+                elif all_prepared and items_pending:
+                    st.record_block_start(t)
                 else:
-                    last_item_ready_t = st.cycle_start_t + 0.90 * st.cycle_T
-                    if st.tote_ready_t >= 0:
-                        last_item_ready_t = max(last_item_ready_t, st.tote_ready_t)
-                    if st.box_queue:
-                        last_item_ready_t = max(last_item_ready_t, max(st.box_queue))
-                    items_pending = st.tote_ready_t >= 0 or bool(st.box_queue)
-                    if t >= last_item_ready_t and items_pending:
-                        st.record_block_start(t)
-                    else:
-                        st.record_block_end(t)
+                    st.record_block_end(t)
 
             self.t += DT_S
 
@@ -379,11 +408,32 @@ class Engine:
             wait_total += acc
             wait_per.append((st.sid, st.x, acc, blocked_now, wait_now))
 
-            tote_prep_s = max(0.0, self.t - st.tote_prep_start) if st.tote_prep_start >= 0 else -1.0
-            tote_wait_s = max(0.0, self.t - st.tote_wait_start) if st.tote_wait_start >= 0 else -1.0
-            box_prep_s  = max(0.0, self.t - st.box_prep_start)  if (st.box_prep_start >= 0 and st.box_queue) else -1.0
+            # ── Plan visual: estado actual de los 3 slots de preparación ──
+            tote_induced = st.plan_tote_ready > 0 and st.tote_ready_t < 0
+            box1_induced = st.plan_n_boxes >= 1 and len(st.box_queue) < st.plan_n_boxes
+            box2_induced = st.plan_n_boxes >= 2 and len(st.box_queue) <= st.plan_n_boxes - 2
 
-            st_timers.append((st.sid, wait_now, tote_prep_s, box_prep_s, tote_wait_s, -1.0, 0))
+            # Ciclo completo: todos los items inducidos, el siguiente aún no ha empezado
+            # (el plan se resetea en el próximo tick). Mostrar slots vacíos.
+            cycle_complete = (st.plan_tote_start > 0
+                              and st.tote_ready_t < 0
+                              and not st.box_queue)
+            if cycle_complete:
+                pts, ptr, ti   = -1.0, -1.0, False
+                pb1s, pb1r, b1i = -1.0, -1.0, False
+                pb2s, pb2r, b2i = -1.0, -1.0, False
+            else:
+                pts,  ptr  = st.plan_tote_start, st.plan_tote_ready
+                pb1s, pb1r = st.plan_box1_start,  st.plan_box1_ready
+                pb2s, pb2r = st.plan_box2_start,  st.plan_box2_ready
+                ti, b1i, b2i = tote_induced, box1_induced, box2_induced
+
+            st_timers.append((
+                st.sid, wait_now,
+                pts, ptr, ti,
+                pb1s, pb1r, b1i,
+                pb2s, pb2r, b2i,
+            ))
 
             tote_sum += st.tote_time_sum;  tote_cnt += st.tote_time_count
             box_sum  += st.box_time_sum;   box_cnt  += st.box_time_count

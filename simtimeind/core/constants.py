@@ -37,6 +37,13 @@ PUSH_ENABLED_DEFAULT: bool = True
 RETRY_CHECK_S: float = DT_S                  # cadencia de reintento de inserción
 INSERT_HALF_RANGE_M: float = 0.75            # rango búsqueda de hueco en cinta por banda (todas las mesas)
 
+# ── Tiempos de preparación de items (absolutos, en segundos) ─────
+TOTE_PREP_MIN_S: float = 6.0    # tiempo mínimo absoluto para preparar una cubeta (s)
+TOTE_PREP_MAX_S: float = 9.0    # tiempo máximo absoluto para preparar una cubeta (s)
+# Los paquetes se distribuyen el tiempo restante del ciclo de forma secuencial:
+#   1 paquete  → ocupa el 100 % del tiempo restante tras la cubeta
+#   2 paquetes → cada uno ocupa el 50 % del tiempo restante
+
 # ── Defaults operario ───────────────────────────────────────────
 # ── Probabilidad de paquetes por cubeta ─────────────────────────
 # Cada ciclo normal induce 1 cubeta + entre 1 y 3 paquetes según estas probs.
@@ -88,8 +95,8 @@ CYCLE_MIN_S: float = 30.0       # tiempo de ciclo mínimo absoluto (s) — ning�
 CYCLE_MAX_S: float = 120.0      # tiempo de ciclo máximo absoluto (s) — ningún operario va más lento
 
 # ── Defaults arranque ───────────────────────────────────────────
-START_AT_S: float      = 0.5        # tiempo de arranque antes de empezar a contar producción  
-START_STAGGER_S: float = 60         # tiempo entre arranques de operarios (si se arranca con todos operativos)
+START_AT_S: float      = 2.0        # tiempo mínimo hasta el primer arranque (s)
+START_STAGGER_S: float = 15.0       # ventana aleatoria de arranques escalonados (s) — cada mesa arranca en [START_AT_S, START_AT_S + START_STAGGER_S]
 
 # ── Defaults EXE (ejecución directa sin argumentos) ─────────────
 EXE_STATIONS: int     = 22

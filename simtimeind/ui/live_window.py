@@ -247,18 +247,31 @@ class LiveWindow:
         self._st_pref_box  = []
         self._st_tote_ev_t = []   # solo tiempos de eventos tote (kc=1) por estación
         self._st_box_ev_t  = []   # solo tiempos de eventos box  (kc=0) por estación
+        # Post-warmup: para contar ciclos solo después del calentamiento
+        self._st_ev_t_pw      = []
+        self._st_pref_tote_pw = []
+        self._st_pref_box_pw  = []
         for si in range(n_st):
             pt = [0]; pb = [0]
             tote_t = []; box_t = []
+            pt_pw = [0]; pb_pw = [0]
+            ev_t_pw = []
             for t_ev, kc in zip(st_ev_t[si], st_ev_kc[si]):
                 pt.append(pt[-1] + (1 if kc == 1 else 0))
                 pb.append(pb[-1] + (1 if kc == 0 else 0))
                 if kc == 1: tote_t.append(t_ev)
                 else:       box_t.append(t_ev)
+                if t_ev >= warmup:
+                    ev_t_pw.append(t_ev)
+                    pt_pw.append(pt_pw[-1] + (1 if kc == 1 else 0))
+                    pb_pw.append(pb_pw[-1] + (1 if kc == 0 else 0))
             self._st_pref_tote.append(pt)
             self._st_pref_box.append(pb)
             self._st_tote_ev_t.append(tote_t)
             self._st_box_ev_t.append(box_t)
+            self._st_ev_t_pw.append(ev_t_pw)
+            self._st_pref_tote_pw.append(pt_pw)
+            self._st_pref_box_pw.append(pb_pw)
         # Detectar stations packages_only (M22: solo paquetes, sin cubetas)
         self._st_packages_only = [False] * n_st
         if n_st > 0:
@@ -284,6 +297,21 @@ class LiveWindow:
             self._cpref_tote.append(self._cpref_tote[-1] + (1 if kc == 1 else 0))
 
         self._counter_first_t = count_events[0][0] if count_events else -1.0
+
+        # Índices de acceso rápido O(log n) para intervalos de bloqueo
+        # _blk_starts[i]: lista de tiempos de inicio de cada intervalo de la estación i
+        # _blk_prefix[i]: [0, d0, d0+d1, ...] — sumas acumuladas de duraciones
+        n_st2 = len(self._stations_raw)
+        self._blk_starts: list[list[float]] = []
+        self._blk_prefix: list[list[float]] = []
+        for i in range(n_st2):
+            intervals = self._blocked_raw[i] if i < len(self._blocked_raw) else []
+            starts  = [float(a) for a, b in intervals]
+            prefix  = [0.0]
+            for a, b in intervals:
+                prefix.append(prefix[-1] + (float(b) - float(a)))
+            self._blk_starts.append(starts)
+            self._blk_prefix.append(prefix)
 
         cyc  = meta.get("cycle_stats_total", {})
         self._cyc_mean  = float(cyc.get("mean_s", 0.0))
@@ -321,45 +349,174 @@ class LiveWindow:
         else:
             t_cnt = 1.0
 
-        # station_production: todos los eventos hasta t_floor (sin filtro warmup)
+        # station_production: tc/bc todos los eventos, cc solo post-warmup
         station_production = []
         for si, st in enumerate(self._stations_raw):
             idx_st = bisect.bisect_right(self._st_ev_t[si], t_floor)
             tc = self._st_pref_tote[si][idx_st]
             bc = self._st_pref_box[si][idx_st]
             po = self._st_packages_only[si]
-            cc = bc if po else tc   # ciclos = totes (o boxes para M22)
+            idx_pw = bisect.bisect_right(self._st_ev_t_pw[si], t_floor)
+            tc_pw = self._st_pref_tote_pw[si][idx_pw]
+            bc_pw = self._st_pref_box_pw[si][idx_pw]
+            cc = bc_pw if po else tc_pw   # ciclos post-warmup
             station_production.append((st["sid"], si, tc, bc, cc, po))
+
+        _TOTE_PREP_EST = 7.5   # estimación media de duración de preparación de cubeta (s)
 
         wait_total = 0.0; wait_per = []; station_timers = []
         for i, st in enumerate(self._stations_raw):
-            raw = self._blocked_raw[i] if i < len(self._blocked_raw) else []
-            acc = 0.0; wait_now = 0.0
-            for a, b in raw:
-                if t_s <= a: continue
-                acc += max(0.0, min(b, t_s) - a)
-                if a <= t_s <= b: wait_now = t_s - a
+            raw     = self._blocked_raw[i] if i < len(self._blocked_raw) else []
+            bstarts = self._blk_starts[i]
+            bprefix = self._blk_prefix[i]
+
+            # O(log n): acumulado hasta t_s usando sumas de prefijo
+            blk_idx  = bisect.bisect_right(bstarts, t_s)   # primer intervalo con start > t_s
+            acc      = bprefix[blk_idx]
+            wait_now = 0.0
+            if blk_idx > 0:
+                a_last, b_last = raw[blk_idx - 1]
+                if b_last > t_s:                            # intervalo activo: ajustar acc
+                    acc     -= (b_last - t_s)
+                    wait_now = t_s - a_last
             wait_total += acc
             wait_per.append((st["sid"], st["x"], acc, False, wait_now))
 
-            # Timer de ciclo: tiempo desde la última cubeta inductada
+            # ── Reconstruir estado de los 3 slots de preparación ─────
             tote_times = self._st_tote_ev_t[i]
             box_times  = self._st_box_ev_t[i]
-            idx_tote = bisect.bisect_right(tote_times, t_s) - 1
-            idx_box  = bisect.bisect_right(box_times,  t_s) - 1
-            tote_prep_s  = t_s - tote_times[idx_tote] if idx_tote >= 0 else -1.0
-            box_prep_s   = t_s - box_times[idx_box]   if idx_box  >= 0 else -1.0
-            # Si hay un box más reciente que el tote, mostrar box prep; si no, solo ciclo
-            if tote_prep_s >= 0 and box_prep_s >= 0 and box_prep_s < tote_prep_s:
-                tote_prep_s_show = tote_prep_s
-                box_prep_s_show  = box_prep_s
+            pkg_only   = self._st_packages_only[i]
+
+            if pkg_only:
+                # ── M22: solo paquetes, ciclo continuo ───────────────
+                # Nunca muestra "OK" — en cuanto induce empieza el siguiente.
+                idx_bx = bisect.bisect_right(box_times, t_s) - 1
+                T_prev_box = box_times[idx_bx]     if idx_bx >= 0                 else None
+                T_next_box = box_times[idx_bx + 1] if idx_bx + 1 < len(box_times) else None
+
+                # Detectar intervalo de bloqueo activo (O(1), ya calculado arriba)
+                blk_a = raw[blk_idx - 1][0] if wait_now > 0.0 else None
+
+                if T_next_box is not None:
+                    plan_box1_start = T_prev_box if T_prev_box is not None else 0.0
+                    # Bloqueado: congelar en blk_a; sin bloqueo: contar hasta T_next_box
+                    plan_box1_ready = blk_a if blk_a is not None else T_next_box
+                    box1_induced    = False   # nunca OK
+                else:
+                    plan_box1_start = plan_box1_ready = -1.0
+                    box1_induced    = False
+                plan_tote_start = plan_tote_ready = -1.0; tote_induced  = False
+                plan_box2_start = plan_box2_ready = -1.0; box2_induced  = False
+
             else:
-                tote_prep_s_show = tote_prep_s
-                box_prep_s_show  = -1.0
+                # ── M01–M21: ciclos cubeta + paquetes ────────────────
+                idx_tp = bisect.bisect_right(tote_times, t_s) - 1
+                T_last_tote = tote_times[idx_tp]     if idx_tp >= 0                       else None
+                T_next_tote = tote_times[idx_tp + 1] if idx_tp + 1 < len(tote_times)      else None
+
+                # Paquetes pertenecientes al ciclo actual [T_last_tote, T_next_tote)
+                idx_bx0 = bisect.bisect_right(box_times, T_last_tote) if T_last_tote is not None else 0
+                idx_bx1 = bisect.bisect_left(box_times, T_next_tote)  if T_next_tote is not None else len(box_times)
+                cycle_boxes = box_times[idx_bx0:idx_bx1]
+
+                # ¿Ciclo completo? Todos los paquetes del ciclo ya fueron inducidos
+                cycle_complete = bool(cycle_boxes) and cycle_boxes[-1] <= t_s
+
+                if T_last_tote is None:
+                    # Primera cubeta del operario: aún preparándose antes del primer evento
+                    T_first = tote_times[0] if tote_times else None
+                    if T_first is not None:
+                        plan_tote_start = max(0.0, T_first - _TOTE_PREP_EST)
+                        plan_tote_ready = T_first
+                    else:
+                        plan_tote_start = plan_tote_ready = -1.0
+                    tote_induced    = False
+                    plan_box1_start = plan_box1_ready = -1.0; box1_induced = False
+                    plan_box2_start = plan_box2_ready = -1.0; box2_induced = False
+
+                elif cycle_complete and T_next_tote is not None:
+                    blk_a = raw[blk_idx - 1][0] if wait_now > 0.0 else None
+
+                    if blk_a is not None and T_next_tote > t_s:
+                        # La estación está bloqueada y la próxima cubeta aún no se ha
+                        # inductado. Esto ocurre cuando los paquetes se inductaron ANTES
+                        # que su cubeta (congestión en M20/M21): cycle_complete se disparó
+                        # prematuramente. Mostrar solo la cubeta congelada + bloqueo.
+                        plan_tote_start = cycle_boxes[-1]
+                        plan_tote_ready = blk_a
+                        tote_induced    = False
+                        plan_box1_start = plan_box1_ready = -1.0; box1_induced = False
+                        plan_box2_start = plan_box2_ready = -1.0; box2_induced = False
+
+                    else:
+                        # ── CICLO COMPLETO: mostrar preparación de la nueva cubeta ──
+                        T_new_start     = cycle_boxes[-1]
+                        plan_tote_start = T_new_start
+                        plan_tote_ready = T_new_start + _TOTE_PREP_EST
+                        tote_induced    = (T_next_tote <= t_s)
+
+                        # En cuanto acaba la prep de la cubeta, el paquete 1 empieza,
+                        # independientemente de si la cubeta se ha inducido o no.
+                        new_tote_ready = T_new_start + _TOTE_PREP_EST
+                        if t_s >= new_tote_ready:
+                            # Buscar los paquetes del nuevo ciclo (después de T_next_tote)
+                            new_bx0 = bisect.bisect_right(box_times, T_next_tote)
+                            new_boxes = box_times[new_bx0:new_bx0 + 2]  # máx 2 paquetes
+
+                            if len(new_boxes) >= 1:
+                                T_nb1 = new_boxes[0]
+                                box1_induced    = (T_nb1 <= t_s)
+                                plan_box1_start = new_tote_ready
+                                plan_box1_ready = T_nb1 if box1_induced else (blk_a if blk_a is not None else T_nb1)
+                            else:
+                                plan_box1_start = plan_box1_ready = -1.0; box1_induced = False
+
+                            if len(new_boxes) >= 2:
+                                T_nb2 = new_boxes[1]
+                                box2_induced    = (T_nb2 <= t_s)
+                                plan_box2_start = new_boxes[0]
+                                plan_box2_ready = T_nb2 if box2_induced else (blk_a if blk_a is not None else T_nb2)
+                            else:
+                                plan_box2_start = plan_box2_ready = -1.0; box2_induced = False
+                        else:
+                            plan_box1_start = plan_box1_ready = -1.0; box1_induced = False
+                            plan_box2_start = plan_box2_ready = -1.0; box2_induced = False
+
+                else:
+                    # ── CICLO EN CURSO: cubeta ya inducida, paquetes pendientes ──
+                    plan_tote_start = T_last_tote - _TOTE_PREP_EST
+                    plan_tote_ready = T_last_tote
+                    tote_induced    = True   # cubeta inducida en T_last_tote
+
+                    # Detectar si la mesa está en un intervalo de bloqueo ahora mismo.
+                    # blk_a = momento en que terminaron de prepararse TODOS los bultos
+                    # del ciclo (= cuando empezó el bloqueo). Sirve para congelar los
+                    # slots de items pendientes en vez de seguir contando.
+                    blk_a = raw[blk_idx - 1][0] if wait_now > 0.0 else None
+
+                    if len(cycle_boxes) >= 1:
+                        T_box1       = cycle_boxes[0]
+                        box1_induced = (T_box1 <= t_s)
+                        plan_box1_start = T_last_tote
+                        # Si pendiente y bloqueado: congelar en blk_a (fin de prep real)
+                        # Si pendiente sin bloqueo: usar T_box1 (inducción inmediata a prep)
+                        # Si inducido: usar T_box1 (correcto)
+                        plan_box1_ready = T_box1 if box1_induced else (blk_a if blk_a is not None else T_box1)
+                    else:
+                        plan_box1_start = plan_box1_ready = -1.0; box1_induced = False
+
+                    if len(cycle_boxes) >= 2:
+                        T_box2       = cycle_boxes[1]
+                        box2_induced = (T_box2 <= t_s)
+                        plan_box2_start = cycle_boxes[0]
+                        plan_box2_ready = T_box2 if box2_induced else (blk_a if blk_a is not None else T_box2)
+                    else:
+                        plan_box2_start = plan_box2_ready = -1.0; box2_induced = False
 
             station_timers.append((st["sid"], wait_now,
-                                   tote_prep_s_show, box_prep_s_show,
-                                   wait_now, -1.0, 0))
+                                   plan_tote_start, plan_tote_ready, tote_induced,
+                                   plan_box1_start, plan_box1_ready, box1_induced,
+                                   plan_box2_start, plan_box2_ready, box2_induced))
 
         snap = SimSnapshot(
             t=t_floor,

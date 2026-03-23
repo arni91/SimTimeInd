@@ -301,7 +301,11 @@ class ReplayWindow:
 
             wait_total += acc
             wait_per.append((st.sid, st.x, acc, blocked_now, wait_now))
-            station_timers.append((st.sid, wait_now, -1.0, -1.0, -1.0))
+            # Formato nuevo (11 elementos): sin info de ciclo en replay
+            station_timers.append((st.sid, wait_now,
+                                   -1.0, -1.0, False,
+                                   -1.0, -1.0, False,
+                                   -1.0, -1.0, False))
 
         snap = SimSnapshot(
             t=t_s,

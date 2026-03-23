@@ -190,15 +190,19 @@ class CanvasRenderer:
     def _draw_stations(self, snap):
         c  = self.canvas
         by = BELT_Y
+        t  = snap.t   # tiempo actual de simulación
 
-        # Dimensiones de los recuadros de ítem debajo de cada mesa
-        BW, BH, BGAP = 34, 22, 3   # ancho celda, alto, separación vertical entre boxes
-        BM = 2                      # margen horizontal → recuadro dibujado = BW-2*BM = 30px
+        # ── Dimensiones de slots de preparación (3 filas bajo cada mesa) ──
+        SW, SH, SGAP = 30, 18, 2   # ancho slot, alto slot, separación vertical
 
-        wait_map  = {sid: (acc_s, bn, wn)
-                     for sid, x, acc_s, bn, wn in snap.wait_per_station}
-        timer_map = {sid: (tp, bp, tw, ep, eb)
-                     for sid, _w, tp, bp, tw, ep, eb in snap.station_timers}
+        wait_map = {sid: (acc_s, bn, wn)
+                    for sid, x, acc_s, bn, wn in snap.wait_per_station}
+
+        # Nuevo formato: (sid, wait_now, pts, ptr, ti, pb1s, pb1r, b1i, pb2s, pb2r, b2i)
+        timer_map = {}
+        for row in snap.station_timers:
+            if len(row) >= 11:
+                timer_map[row[0]] = row[1:]   # todo menos sid
 
         for i, st in enumerate(self.stations):
             sid      = st.sid if hasattr(st, "sid") else st["sid"]
@@ -210,18 +214,26 @@ class CanvasRenderer:
             pair = i % 2
 
             acc_s, blocked_now, wait_now_s = wait_map.get(sid, (0.0, False, 0.0))
-            tote_prep_s, box_prep_s, tote_wait_s, *_ = timer_map.get(sid, (-1.0, -1.0, -1.0, -1.0, 0))
+            td = timer_map.get(sid)
+            if td and len(td) >= 10:
+                (_, plan_tote_start, plan_tote_ready, tote_induced,
+                 plan_box1_start, plan_box1_ready, box1_induced,
+                 plan_box2_start, plan_box2_ready, box2_induced) = td
+            else:
+                plan_tote_start = plan_tote_ready = -1.0; tote_induced  = False
+                plan_box1_start = plan_box1_ready = -1.0; box1_induced  = False
+                plan_box2_start = plan_box2_ready = -1.0; box2_induced  = False
 
-            is_blocked  = wait_now_s >= WAIT_BLOCKED_THRESHOLD_S
-            col_line    = COLOR_STATION_CRIT if is_blocked else COLOR_STATION_OK
-            col_text    = COLOR_STATION_CRIT if is_blocked else COLOR_TEXT_SECONDARY
-            lw          = 3 if is_blocked else 2
+            is_blocked = wait_now_s > 0.0
+            col_line   = COLOR_STATION_OK
+            col_text   = COLOR_TEXT_SECONDARY
+            lw         = 2
 
-            # ── Línea vertical de la mesa (cuerpo gris) ──────────────
+            # ── Línea vertical de la mesa ─────────────────────────────
             c.create_line(px, by - 52, px, by + 52, fill=col_line, width=lw)
             c.create_oval(px - 5, by - 5, px + 5, by + 5, fill=col_line, outline="")
 
-            # ── Etiqueta de mesa (posición original) ─────────────────
+            # ── Etiqueta de mesa ──────────────────────────────────────
             label_y = by - (68 + pair * 16)
             c.create_text(px, label_y, text=sid,
                           fill=col_text, font=_FONT_LABEL_MD, anchor="center")
@@ -230,10 +242,8 @@ class CanvasRenderer:
                               font=("Helvetica", 7, "bold"), anchor="center")
 
             # ── Offset horizontal para no solapar mesas contiguas ────
-            # Si la mesa de la izquierda está a <1.5m → desplazar a la derecha
-            # Si la mesa de la derecha está a <1.5m  → desplazar a la izquierda
-            CLOSE = 1.5   # m — umbral de "mesas contiguas"
-            SHIFT = 6     # px — desplazamiento lateral
+            CLOSE = 1.5
+            SHIFT = 6
             box_off = 0
             if i > 0:
                 xp = self.stations[i-1].x if hasattr(self.stations[i-1], "x") else float(self.stations[i-1]["x"])
@@ -244,44 +254,73 @@ class CanvasRenderer:
                 if xn - x_m < CLOSE:
                     box_off -= SHIFT
 
-            # ── Recuadros de ítem DEBAJO del cinturón ────────────────
-            slot = [0]
+            # ── Slots de preparación DEBAJO del cinturón ─────────────
+            cx = px + box_off
+            sx0 = cx - SW // 2   # x izquierda del slot
 
-            def _item_box(timer_s, fill_col, text_col="#FFFFFF", label="",
-                          _px=px, _off=box_off):
-                s = slot[0]
-                cx  = _px + _off
-                bx0 = cx - (BW - 2 * BM) // 2
-                by0 = by + 57 + s * (BH + BGAP)
-                by1 = by0 + BH
-                c.create_rectangle(bx0, by0, bx0 + BW - 2 * BM, by1,
-                                   fill=fill_col, outline="#111418", width=1)
-                txt = f"{label}{timer_s:.0f}s" if timer_s >= 0 else label
-                c.create_text(cx, (by0 + by1) // 2, text=txt,
-                              fill=text_col, font=_FONT_TIMER, anchor="center")
-                slot[0] += 1
+            def _draw_prep_slot(row, plan_start, plan_ready, induced, base_col, lbl_col):
+                """Slot de preparación: nunca se pone rojo (el bloqueo va en caja aparte).
+
+                  - Vacío        → fondo muy oscuro, sin texto
+                  - No iniciado  → fondo muy oscuro, sin texto
+                  - Preparando   → celda pintada, contador subiendo
+                  - Listo        → celda pintada, tiempo de prep CONGELADO
+                  - Inducido     → fondo oscuro + "OK" verde
+                """
+                sy0   = by + 57 + row * (SH + SGAP)
+                sy1   = sy0 + SH
+                mid_y = (sy0 + sy1) // 2
+
+                if plan_ready < 0:
+                    c.create_rectangle(sx0, sy0, sx0 + SW, sy1,
+                                       fill="#141720", outline="#252830", width=1)
+                    return
+
+                if induced:
+                    c.create_rectangle(sx0, sy0, sx0 + SW, sy1,
+                                       fill="#182218", outline="#253530", width=1)
+                    c.create_text(cx, mid_y, text="OK",
+                                  fill="#4CAF82", font=_FONT_TIMER, anchor="center")
+                    return
+
+                if plan_start < 0 or t < plan_start:
+                    c.create_rectangle(sx0, sy0, sx0 + SW, sy1,
+                                       fill="#141720", outline="#252830", width=1)
+                    return
+
+                if t >= plan_ready:
+                    # Listo pero no inducido: tiempo de prep CONGELADO
+                    prep_dur = max(0.0, plan_ready - plan_start)
+                    c.create_rectangle(sx0, sy0, sx0 + SW, sy1,
+                                       fill=base_col, outline="#111418", width=1)
+                    c.create_text(cx, mid_y, text=f"{prep_dur:.0f}s",
+                                  fill=lbl_col, font=_FONT_TIMER, anchor="center")
+                else:
+                    # Preparando: cuenta adelante
+                    elapsed = max(0.0, t - plan_start)
+                    c.create_rectangle(sx0, sy0, sx0 + SW, sy1,
+                                       fill=base_col, outline="#111418", width=1)
+                    c.create_text(cx, mid_y, text=f"{elapsed:.0f}s",
+                                  fill=lbl_col, font=_FONT_TIMER, anchor="center")
 
             if not pkg_only:
-                # Recuadro de CUBETA: naranja normal, rojo si bloqueada
-                if tote_prep_s >= 0:
-                    if is_blocked:
-                        _item_box(wait_now_s, COLOR_STATION_CRIT, "#FFFFFF")
-                    else:
-                        _item_box(tote_prep_s, COLOR_TOTE, "#1A1D23")
-
-                # Recuadro de PAQUETE (solo si hay un paquete más reciente que la cubeta)
-                if box_prep_s >= 0:
-                    if is_blocked:
-                        _item_box(wait_now_s, COLOR_STATION_CRIT, "#FFFFFF")
-                    else:
-                        _item_box(box_prep_s, COLOR_BOX, "#FFFFFF")
+                _draw_prep_slot(0, plan_tote_start, plan_tote_ready, tote_induced, COLOR_TOTE, "#1A1D23")
+                _draw_prep_slot(1, plan_box1_start,  plan_box1_ready,  box1_induced,  COLOR_BOX,  "#FFFFFF")
+                _draw_prep_slot(2, plan_box2_start,  plan_box2_ready,  box2_induced,  COLOR_BOX,  "#FFFFFF")
             else:
-                # M22: solo paquetes, recuadro azul
-                if tote_prep_s >= 0:
-                    if is_blocked:
-                        _item_box(wait_now_s, COLOR_STATION_CRIT, "#FFFFFF")
-                    else:
-                        _item_box(tote_prep_s, COLOR_BOX, "#FFFFFF")
+                _draw_prep_slot(0, plan_box1_start, plan_box1_ready, box1_induced, COLOR_BOX, "#FFFFFF")
+
+            # ── 4º recuadro: contador de bloqueo (solo cuando el ciclo está bloqueado) ──
+            # Aparece debajo de los slots de prep cuando wait_now_s > 0
+            if is_blocked:
+                block_row = 3 if not pkg_only else 1
+                by4   = by + 57 + block_row * (SH + SGAP)
+                by4e  = by4 + SH
+                mid4  = (by4 + by4e) // 2
+                c.create_rectangle(sx0, by4, sx0 + SW, by4e,
+                                   fill=COLOR_STATION_CRIT, outline="#FF4040", width=1)
+                c.create_text(cx, mid4, text=f"{int(wait_now_s)}s",
+                              fill="#FFFFFF", font=_FONT_TIMER, anchor="center")
 
     def _draw_motors(self):
         c    = self.canvas
@@ -380,7 +419,8 @@ class CanvasRenderer:
         c.create_line(col1_x, py + 10, col1_x, py + ph - 10, fill=COLOR_PANEL_BORDER, width=1)
         self._kpi_rendimiento(snap, x=rend_x, y=py + 12)
         c.create_line(col3_x, py + 10, col3_x, py + ph - 10, fill=COLOR_PANEL_BORDER, width=1)
-        self._kpi_waits(snap, x=wait_x, y=py + 12)
+        y_after_ciclos = self._kpi_ciclos(snap, x=wait_x, y=py + 12)
+        self._kpi_waits(snap, x=wait_x, y=y_after_ciclos + 10)
 
     def _kpi_production(self, snap, counter_snap, x, y):
         c = self.canvas
@@ -543,6 +583,40 @@ class CanvasRenderer:
         _draw_row("TOTAL", COLOR_TEXT_PRIMARY, fnt_bold,
                   SIM_MEAN_CYCLE_S, tot_t_cub, tot_t_paq, tot_t_tot,
                   d_fnt=dat_bold)
+
+    def _kpi_ciclos(self, snap, x, y):
+        """Tabla CICLOS COMPLETADOS (post-calentamiento). Devuelve la y final."""
+        c = self.canvas
+        right_edge = CANVAS_W - 20
+        c.create_text(x, y, text="CICLOS COMPLETADOS",
+                      fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_SM, anchor="nw")
+        y += 14
+        c.create_line(x, y, right_edge, y, fill=COLOR_PANEL_BORDER, width=1)
+        y += 3
+
+        col_w = (right_edge - x) // 4
+        row_h = 13
+
+        for ci, lbl in enumerate(["M01–M07", "M08–M14", "M15–M21", "M22"]):
+            c.create_text(x + ci * col_w, y, text=lbl,
+                          fill=COLOR_TEXT_SECONDARY, font=_FONT_SANS_XS, anchor="nw")
+        y += 12
+        c.create_line(x, y, right_edge, y, fill=COLOR_PANEL_BORDER, width=1)
+        y += 3
+
+        all_st = list(snap.station_production)
+        groups = [all_st[0:7], all_st[7:14], all_st[14:21], all_st[21:]]
+        for ri in range(7):
+            for ci, grp in enumerate(groups):
+                if ri >= len(grp):
+                    continue
+                sid, idx, tc, bc, cc, po = grp[ri]
+                cx_col = x + ci * col_w
+                cy_row = y + ri * row_h
+                c.create_text(cx_col,      cy_row, text=sid,     fill=COLOR_TEXT_SECONDARY, font=_FONT_LABEL_SM, anchor="nw")
+                c.create_text(cx_col + 34, cy_row, text=str(cc), fill=COLOR_TEXT_PRIMARY,   font=_FONT_LABEL_SM, anchor="nw")
+
+        return y + 7 * row_h + 4
 
     def _kpi_waits(self, snap, x, y):
         c = self.canvas

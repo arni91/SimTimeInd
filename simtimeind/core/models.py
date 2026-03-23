@@ -36,6 +36,18 @@ class Station:
     tote_queue_extra: list  = field(default_factory=list)   # buffer slot 2 (cubeta ciclo N+1)
     last_pkg_sched_t: float = -1.0   # t cuando el último paquete del ciclo está preparado
 
+    # ── plan del ciclo actual (set en _plan_new_cycle) ───────────
+    # Tiempos absolutos de inicio y fin de preparación de cada item.
+    # Cada temporizador empieza cuando acaba el anterior (secuencial),
+    # independientemente de si el item anterior pudo inducirse o no.
+    plan_tote_start: float = -1.0   # t cuando empieza la preparación de la cubeta
+    plan_tote_ready: float = -1.0   # t cuando la cubeta estará lista para inducir
+    plan_box1_start: float = -1.0   # t cuando empieza la prep del paquete 1 (= plan_tote_ready)
+    plan_box1_ready: float = -1.0   # t cuando el paquete 1 estará listo
+    plan_box2_start: float = -1.0   # t cuando empieza la prep del paquete 2 (= plan_box1_ready)
+    plan_box2_ready: float = -1.0   # t cuando el paquete 2 estará listo (-1 si no hay)
+    plan_n_boxes:    int   = 0      # número de paquetes planificados en este ciclo
+
     # ── paquetes: cola independiente ─────────────────────────────
     box_queue: list        = field(default_factory=list)  # [ready_t, ...]
     box_next_try_t: float  = 0.0
@@ -107,10 +119,13 @@ class SimSnapshot:
     wait_total_s: float
     wait_per_station: list
 
-    # [(sid, wait_now_s, tote_prep_s, box_prep_s, tote_wait_s, extra_prep_s, extra_boxes), ...]
-    # tote_prep_s  : slot 1 - segundos preparando/esperando inducir cubeta (-1 si ninguna)
-    # extra_prep_s : slot 2 - segundos preparando cubeta buffer (-1 si no hay)
-    # extra_boxes  : paquetes del ciclo N+1 ya listos en cola (pendientes de inducir)
+    # Formato por estación:
+    # (sid, wait_now_s,
+    #  plan_tote_start, plan_tote_ready, tote_induced,      # slot 1: cubeta
+    #  plan_box1_start, plan_box1_ready, box1_induced,      # slot 2: paquete 1
+    #  plan_box2_start, plan_box2_ready, box2_induced)      # slot 3: paquete 2
+    # Los tiempos son absolutos (s). -1.0 = slot no activo.
+    # tote_induced / box_induced: True si ya fue inducido en este ciclo.
     station_timers: list = field(default_factory=list)
 
     mean_tote_s: float = 0.0
