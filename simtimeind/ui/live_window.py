@@ -11,6 +11,7 @@ from ..core.constants import (
     CANVAS_H, CANVAS_W,
     COLOR_BG, COLOR_PANEL_BG, COLOR_TEXT_SECONDARY,
     DT_S,
+    MOTOR_POSITIONS_M, MOTOR_SPEEDS_MPM,
 )
 from ..core.engine import Engine
 from ..core.models import Item, SimSnapshot
@@ -47,7 +48,7 @@ class LiveWindow:
         self.root.title(f"SimTimeInd - {engine.n} mesas - {speed}x")
         self.root.configure(bg=COLOR_BG)
         self.root.resizable(True, True)
-        self.root.geometry(f"{CANVAS_W}x{CANVAS_H + 40}")
+        self.root.geometry(f"{CANVAS_W}x{CANVAS_H + 74}")
 
         # ── Layout grid (autohide scrollbars) ─────────────────────────
         self.root.grid_rowconfigure(0, weight=1)
@@ -58,7 +59,7 @@ class LiveWindow:
 
         hbar = tk.Scrollbar(self.root, orient="horizontal")
         vbar = tk.Scrollbar(self.root, orient="vertical")
-        hbar.grid(row=2, column=0, sticky="ew")
+        hbar.grid(row=3, column=0, sticky="ew")
         vbar.grid(row=0, column=1, sticky="ns")
         hbar.grid_remove()
         vbar.grid_remove()
@@ -145,6 +146,33 @@ class LiveWindow:
                  bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
                  font=("Consolas", 9)).pack(side="right", padx=10)
 
+        # ── Panel velocidades de motores ──────────────────────────────
+        motor_ctrl = tk.Frame(self.root, bg=COLOR_PANEL_BG, height=34)
+        motor_ctrl.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        tk.Label(motor_ctrl, text="Velocidades cinta (m/min):",
+                 bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
+                 font=("Helvetica", 10)).pack(side="left", padx=(8, 4))
+
+        motor_speeds_mpm = [round(s * 60.0, 1) for s in engine.motor_speeds_mps]
+        self._motor_speed_vars: list[tk.DoubleVar] = []
+        motor_names = [f"M{i+1}:" for i in range(len(engine.motor_positions))]
+        for name, spd in zip(motor_names, motor_speeds_mpm):
+            tk.Label(motor_ctrl, text=name,
+                     bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
+                     font=("Helvetica", 10)).pack(side="left", padx=(6, 1))
+            var = tk.DoubleVar(value=spd)
+            self._motor_speed_vars.append(var)
+            tk.Spinbox(motor_ctrl, from_=1.0, to=60.0, increment=1.0,
+                       textvariable=var, width=5,
+                       bg="#2A2E38", fg="#E8ECF2", relief="flat",
+                       font=("Helvetica", 10), buttonbackground="#3A3F4B",
+                       ).pack(side="left", padx=(0, 2))
+
+        tk.Button(motor_ctrl, text="Recalcular",
+                  command=self._recalculate, **btn_style
+                  ).pack(side="left", padx=(10, 4), pady=3)
+
         self.renderer = CanvasRenderer(
             canvas=self.canvas,
             view_start=self.view_start,
@@ -211,6 +239,8 @@ class LiveWindow:
         self._belt_end_m     = float(meta.get("belt_end_m", self._engine_ref.belt_end_m))
         self._counter_x_m    = float(meta.get("counter_x_m", COUNTER_X_M))
         self._warmup_s       = float(meta.get("warmup_s", 0.0))
+        self._motor_positions_m = list(meta.get("motor_positions_m", list(MOTOR_POSITIONS_M)))
+        self._motor_speeds_mps  = [s / 60.0 for s in meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM))]
 
         self._ev_t = [float(e[0]) for e in self._events]
 
@@ -283,7 +313,9 @@ class LiveWindow:
             if st_idx < 0 or st_idx >= len(self._stations_raw):
                 continue
             x0 = float(self._stations_raw[st_idx]["x"])
-            travel = max(0.0, self._counter_x_m - x0) / max(1e-9, self._belt_speed_mps)
+            ix = float(e[4]) if len(e) > 4 and float(e[4]) > 0 else None
+            x_start = ix if ix is not None else x0
+            travel = self._time_to_reach(x_start, self._counter_x_m)
             t_count = ev_t + travel
             if t_count >= self._warmup_s:   # no contar durante calentamiento
                 count_events.append((t_count, kc))
@@ -546,7 +578,8 @@ class LiveWindow:
         )
 
         max_len     = max(self._tote_len, self._box_max)
-        travel_time = (self._belt_end_m + max_len) / max(1e-9, self._belt_speed_mps)
+        min_speed   = max(1e-9, min(self._motor_speeds_mps))
+        travel_time = (self._belt_end_m + max_len) / min_speed
         t0 = max(0.0, t_s - travel_time - 2.0)
         i0 = bisect.bisect_left(self._ev_t, t0)
 
@@ -557,11 +590,115 @@ class LiveWindow:
             if st_idx < 0 or st_idx >= len(self._stations_raw): continue
             dt    = t_s - ev_t
             x0    = ix if ix is not None else float(self._stations_raw[st_idx]["x"])
-            front = x0 + self._belt_speed_mps * dt
+            front = self._position_after(x0, dt)
             if front - length > self._belt_end_m: continue
             items.append(Item(kind="box" if kc == 0 else "tote",
                               front_x=front, length=length))
         return snap, items
+
+    # ── Helpers de posición con velocidades por tramo ─────────────────
+
+    def _position_after(self, x0: float, dt: float) -> float:
+        """Posición de un ítem tras dt segundos desde x0, aplicando velocidades por motor."""
+        x = x0
+        t_rem = dt
+        pos = self._motor_positions_m
+        spd = self._motor_speeds_mps
+        n = len(pos)
+        while t_rem > 1e-9:
+            seg = 0
+            for i in range(1, n):
+                if x >= pos[i]:
+                    seg = i
+            speed = spd[min(seg, len(spd) - 1)]
+            if speed <= 0:
+                break
+            next_b = None
+            for i in range(1, n):
+                if pos[i] > x:
+                    next_b = pos[i]
+                    break
+            if next_b is None:
+                x += speed * t_rem
+                break
+            t_to_b = (next_b - x) / speed
+            if t_to_b >= t_rem:
+                x += speed * t_rem
+                break
+            x = next_b
+            t_rem -= t_to_b
+        return x
+
+    def _time_to_reach(self, x0: float, target_x: float) -> float:
+        """Tiempo (s) para que un ítem llegue de x0 a target_x con velocidades por motor."""
+        if target_x <= x0:
+            return 0.0
+        t = 0.0
+        x = x0
+        pos = self._motor_positions_m
+        spd = self._motor_speeds_mps
+        n = len(pos)
+        remaining = target_x - x0
+        while remaining > 1e-9:
+            seg = 0
+            for i in range(1, n):
+                if x >= pos[i]:
+                    seg = i
+            speed = spd[min(seg, len(spd) - 1)]
+            if speed <= 0:
+                return float('inf')
+            next_b = None
+            for i in range(1, n):
+                if pos[i] > x:
+                    next_b = pos[i]
+                    break
+            if next_b is None or next_b >= target_x:
+                t += remaining / speed
+                break
+            dist_to_b = next_b - x
+            t += dist_to_b / speed
+            remaining -= dist_to_b
+            x = next_b
+        return t
+
+    # ── Recalcular con nuevas velocidades de motor ────────────────────
+
+    def _recalculate(self) -> None:
+        speeds = []
+        for v in self._motor_speed_vars:
+            try:
+                speeds.append(max(1.0, float(v.get())))
+            except (tk.TclError, ValueError):
+                speeds.append(22.0)
+        from ..core.engine import Engine
+        new_engine = Engine(**{**self._engine_ref._init_kwargs, 'motor_speeds_mpm': speeds})
+        self._engine_ref = new_engine
+        self._ready = False
+        self._t = 0.0
+        self._t_var.set(0.0)
+        self._slider.config(state="disabled")
+        self._status_var.set("Recalculando...")
+        self.root.after(50, self._do_recalculate)
+
+    def _do_recalculate(self) -> None:
+        self.root.update()
+        eng = self._engine_ref
+        steps = int(eng.duration_s / DT_S) + 1
+        done = 0
+        while done < steps:
+            n = min(50_000, steps - done)
+            eng.step(n)
+            done += n
+            pct = done / steps * 100
+            self._status_var.set(f"Recalculando... {pct:.0f}%")
+            if done % 200_000 == 0:
+                self.root.update_idletasks()
+        rec = record_engine(eng)
+        self._setup_record(rec)
+        self._ready = True
+        self._slider.config(state="normal")
+        self._status_var.set("Simulando...")
+        self._last = time.perf_counter()
 
     # ── Controles ────────────────────────────────────────────────────
 

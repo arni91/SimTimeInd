@@ -188,4 +188,4 @@ SIM_MEAN_CYCLE_S: float = (_SIM_N_TOTAL * 3600.0) / _SIM_CYCLES_H   # ≈ 58.2 s
 # Posiciones en metros respecto al punto de inducción de M01 (0 m)
 # Motor 1 es teórico (antes de M01), los demás son físicos
 MOTOR_POSITIONS_M: list = [-1.000, 7.950, 19.710, 31.610, 43.480]
-MOTOR_SPEED_MPM:   float = 22.0   # velocidad de todos los motores (m/min)
+MOTOR_SPEEDS_MPM:  list = [22.0, 22.0, 22.0, 22.0, 22.0]   # velocidad de cada motor (m/min)

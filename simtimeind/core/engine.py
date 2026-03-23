@@ -23,6 +23,8 @@ from .constants import (
     M22_CYCLE_MAX_S,
     TOTE_PREP_MIN_S,
     TOTE_PREP_MAX_S,
+    MOTOR_POSITIONS_M,
+    MOTOR_SPEEDS_MPM,
 )
 from .models import Item, Station, SimSnapshot
 from .belt import build_station_positions, find_best_insert_x
@@ -51,6 +53,7 @@ class Engine:
         target_boxes_h: float = TARGET_BOXES_H,
         target_totes_h: float = TARGET_TOTES_H,
         warmup_s: float = 0.0,
+        motor_speeds_mpm: list | None = None,
     ):
         # Fijar semilla concreta (para poder recrear el engine idéntico)
         if seed is None:
@@ -63,6 +66,7 @@ class Engine:
             p2=p2, p3=p3, box_sd_m=box_sd_m, push_enabled=push_enabled,
             target_total_h=target_total_h, target_boxes_h=target_boxes_h,
             target_totes_h=target_totes_h, warmup_s=warmup_s,
+            motor_speeds_mpm=list(motor_speeds_mpm or MOTOR_SPEEDS_MPM),
         )
         self.n               = int(stations)
         self.duration_s      = float(duration_s)
@@ -88,6 +92,8 @@ class Engine:
         self.last_x         = self.station_xs[-1]
         self.belt_end_m     = self.last_x + 12.0
         self.belt_speed_mps = BELT_SPEED_MPM / 60.0
+        self.motor_positions  = list(MOTOR_POSITIONS_M)
+        self.motor_speeds_mps = [s / 60.0 for s in (motor_speeds_mpm or MOTOR_SPEEDS_MPM)]
 
         self.stations = [
             Station(sid=f"M{i+1:02d}", x=self.station_xs[i], idx=i)
@@ -119,6 +125,14 @@ class Engine:
         self.cycle_max_total   = 0.0
         # orden de proceso de estaciones (se baraja cada tick para equidad)
         self._station_order: list[int] = list(range(self.n))
+
+    def _speed_at(self, x: float) -> float:
+        """Velocidad de la cinta (m/s) en la posición x según el motor que la mueve."""
+        seg = 0
+        for i in range(1, len(self.motor_positions)):
+            if x >= self.motor_positions[i]:
+                seg = i
+        return self.motor_speeds_mps[min(seg, len(self.motor_speeds_mps) - 1)]
 
     def _sample_box_length(self):
         for _ in range(30):
@@ -242,22 +256,19 @@ class Engine:
             if self.t >= self.duration_s:
                 return
 
-            t  = self.t
-            dx = self.belt_speed_mps * DT_S
-
-            for it in self.items:
-                it.front_x += dx
-            # detectar ítems que cruzan el punto de conteo en este tick
-            # solo se cuentan después del calentamiento (warmup_s)
+            t = self.t
             past_warmup = t >= self.warmup_s
             for it in self.items:
-                if it.front_x >= self.counter_x and (it.front_x - dx) < self.counter_x:
-                    if past_warmup:
-                        if self.counter_first_t < 0:
-                            self.counter_first_t = self.t
-                        self.counted_total += 1
-                        if it.kind == "box":  self.counted_boxes += 1
-                        else:                 self.counted_totes += 1
+                spd  = self._speed_at(it.front_x)
+                dx   = spd * DT_S
+                prev = it.front_x
+                it.front_x += dx
+                if past_warmup and prev < self.counter_x <= it.front_x:
+                    if self.counter_first_t < 0:
+                        self.counter_first_t = self.t
+                    self.counted_total += 1
+                    if it.kind == "box":  self.counted_boxes += 1
+                    else:                 self.counted_totes += 1
             self.items = [it for it in self.items if it.rear_x <= self.belt_end_m]
 
             for st in self.stations:

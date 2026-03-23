@@ -13,6 +13,7 @@ from .constants import (
     STANDARD_GAP_M, DX_WITHIN_PAIR_M, DX_BETWEEN_PAIRS_M,
     RETRY_CHECK_S,
     TARGET_TOTAL_H, TARGET_BOXES_H, TARGET_TOTES_H,
+    MOTOR_POSITIONS_M, MOTOR_SPEEDS_MPM,
 )
 
 
@@ -73,6 +74,8 @@ def to_dict(engine: Engine) -> dict:
             "cycle_stats_stations": cycle_stats_st,
             "mean_tote_s":          0.0,
             "mean_box_s":           0.0,
+            "motor_positions_m":    list(getattr(engine, "motor_positions", MOTOR_POSITIONS_M)),
+            "motor_speeds_mpm":     [s * 60.0 for s in getattr(engine, "motor_speeds_mps", [v/60 for v in MOTOR_SPEEDS_MPM])],
         },
         "stations": [
             {"sid": st.sid, "x": st.x, "start_at": st.start_at}
@@ -144,6 +147,8 @@ def save(engine: Engine, path: str) -> None:
             "target_totes_h":     engine.target_totes_h,
             "cycle_stats_total":  cycle_stats_total,
             "cycle_stats_stations": cycle_stats_st,
+            "motor_positions_m":  list(getattr(engine, "motor_positions", MOTOR_POSITIONS_M)),
+            "motor_speeds_mpm":   [s * 60.0 for s in getattr(engine, "motor_speeds_mps", [v/60 for v in MOTOR_SPEEDS_MPM])],
         },
         "stations": [
             {"sid": st.sid, "x": st.x, "start_at": st.start_at}
