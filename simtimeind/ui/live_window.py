@@ -48,7 +48,7 @@ class LiveWindow:
         self.root.title(f"SimTimeInd - {engine.n} mesas - {speed}x")
         self.root.configure(bg=COLOR_BG)
         self.root.resizable(True, True)
-        self.root.geometry(f"{CANVAS_W}x{CANVAS_H + 74}")
+        self.root.geometry(f"{CANVAS_W}x{CANVAS_H + 40}")
 
         # ── Layout grid (autohide scrollbars) ─────────────────────────
         self.root.grid_rowconfigure(0, weight=1)
@@ -59,7 +59,7 @@ class LiveWindow:
 
         hbar = tk.Scrollbar(self.root, orient="horizontal")
         vbar = tk.Scrollbar(self.root, orient="vertical")
-        hbar.grid(row=3, column=0, sticky="ew")
+        hbar.grid(row=2, column=0, sticky="ew")
         vbar.grid(row=0, column=1, sticky="ns")
         hbar.grid_remove()
         vbar.grid_remove()
@@ -146,32 +146,8 @@ class LiveWindow:
                  bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
                  font=("Consolas", 9)).pack(side="right", padx=10)
 
-        # ── Panel velocidades de motores ──────────────────────────────
-        motor_ctrl = tk.Frame(self.root, bg=COLOR_PANEL_BG, height=34)
-        motor_ctrl.grid(row=2, column=0, columnspan=2, sticky="ew")
-
-        tk.Label(motor_ctrl, text="Velocidades cinta (m/min):",
-                 bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
-                 font=("Helvetica", 10)).pack(side="left", padx=(8, 4))
-
-        motor_speeds_mpm = [round(s * 60.0, 1) for s in engine.motor_speeds_mps]
-        self._motor_speed_vars: list[tk.DoubleVar] = []
-        motor_names = [f"M{i+1}:" for i in range(len(engine.motor_positions))]
-        for name, spd in zip(motor_names, motor_speeds_mpm):
-            tk.Label(motor_ctrl, text=name,
-                     bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
-                     font=("Helvetica", 10)).pack(side="left", padx=(6, 1))
-            var = tk.DoubleVar(value=spd)
-            self._motor_speed_vars.append(var)
-            tk.Spinbox(motor_ctrl, from_=1.0, to=60.0, increment=1.0,
-                       textvariable=var, width=5,
-                       bg="#2A2E38", fg="#E8ECF2", relief="flat",
-                       font=("Helvetica", 10), buttonbackground="#3A3F4B",
-                       ).pack(side="left", padx=(0, 2))
-
-        tk.Button(motor_ctrl, text="Recalcular",
-                  command=self._recalculate, **btn_style
-                  ).pack(side="left", padx=(10, 4), pady=3)
+        # Velocidades de motores: se guardan aquí, se editan clicando las cajitas del canvas
+        self._motor_speeds_mpm: list[float] = [round(s * 60.0, 1) for s in engine.motor_speeds_mps]
 
         self.renderer = CanvasRenderer(
             canvas=self.canvas,
@@ -234,15 +210,19 @@ class LiveWindow:
         meta = rec.get("meta", {})
         self._stations_raw   = rec.get("stations", [])
         self._blocked_raw    = rec.get("blocked_intervals", [])
+        self._plan_events_raw = rec.get("plan_events", [])
         self._events         = rec.get("events", [])
+        self._count_events_raw = rec.get("count_events", [])
         self._belt_speed_mps = float(meta.get("belt_speed_mpm", BELT_SPEED_MPM)) / 60.0
         self._belt_end_m     = float(meta.get("belt_end_m", self._engine_ref.belt_end_m))
         self._counter_x_m    = float(meta.get("counter_x_m", COUNTER_X_M))
         self._warmup_s       = float(meta.get("warmup_s", 0.0))
         self._motor_positions_m = list(meta.get("motor_positions_m", list(MOTOR_POSITIONS_M)))
-        self._motor_speeds_mps  = [s / 60.0 for s in meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM))]
+        loaded_speeds = list(meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM)))
+        self._motor_speeds_mps  = [s / 60.0 for s in loaded_speeds]
+        self._motor_speeds_mpm  = loaded_speeds
         if hasattr(self, "renderer"):
-            self.renderer.motor_speeds_mpm = list(meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM)))
+            self.renderer.motor_speeds_mpm = loaded_speeds
 
         self._ev_t = [float(e[0]) for e in self._events]
 
@@ -309,19 +289,41 @@ class LiveWindow:
         if n_st > 0:
             self._st_packages_only[-1] = True  # última mesa = M22
 
-        count_events: list[tuple[float, int]] = []
-        for e in self._events:
-            ev_t  = float(e[0]); st_idx = int(e[1]); kc = int(e[2])
-            if st_idx < 0 or st_idx >= len(self._stations_raw):
+        self._st_plan_starts = [[] for _ in range(n_st)]
+        self._st_plan_rows = [[] for _ in range(n_st)]
+        for row in self._plan_events_raw:
+            if len(row) < 10:
                 continue
-            x0 = float(self._stations_raw[st_idx]["x"])
-            ix = float(e[4]) if len(e) > 4 and float(e[4]) > 0 else None
-            x_start = ix if ix is not None else x0
-            travel = self._time_to_reach(x_start, self._counter_x_m)
-            t_count = ev_t + travel
-            if t_count >= self._warmup_s:   # no contar durante calentamiento
-                count_events.append((t_count, kc))
-        count_events.sort(key=lambda r: r[0])
+            st_idx = int(row[1])
+            if 0 <= st_idx < n_st:
+                self._st_plan_starts[st_idx].append(float(row[0]))
+                self._st_plan_rows[st_idx].append((
+                    float(row[0]),
+                    float(row[2]), float(row[3]),
+                    float(row[4]), float(row[5]),
+                    float(row[6]), float(row[7]),
+                    int(row[8]), bool(int(row[9])),
+                ))
+
+        count_events: list[tuple[float, int]] = []
+        if self._count_events_raw:
+            for e in self._count_events_raw:
+                if len(e) < 2:
+                    continue
+                count_events.append((float(e[0]), int(e[1])))
+        else:
+            for e in self._events:
+                ev_t  = float(e[0]); st_idx = int(e[1]); kc = int(e[2])
+                if st_idx < 0 or st_idx >= len(self._stations_raw):
+                    continue
+                x0 = float(self._stations_raw[st_idx]["x"])
+                ix = float(e[4]) if len(e) > 4 and float(e[4]) > 0 else None
+                x_start = ix if ix is not None else x0
+                travel = self._time_to_reach(x_start, self._counter_x_m)
+                t_count = ev_t + travel
+                if t_count >= self._warmup_s:
+                    count_events.append((t_count, kc))
+            count_events.sort(key=lambda r: r[0])
 
         self._count_t = [r[0] for r in count_events]
         self._cpref_total = [0]; self._cpref_box = [0]; self._cpref_tote = [0]
@@ -415,6 +417,16 @@ class LiveWindow:
                     wait_now = t_s - a_last
             wait_total += acc
             wait_per.append((st["sid"], st["x"], acc, False, wait_now))
+            plan_timer = self._station_timer_from_plan(i, t_s)
+            if plan_timer is not None:
+                (plan_tote_start, plan_tote_ready, tote_induced,
+                 plan_box1_start, plan_box1_ready, box1_induced,
+                 plan_box2_start, plan_box2_ready, box2_induced) = plan_timer
+                station_timers.append((st["sid"], wait_now,
+                                       plan_tote_start, plan_tote_ready, tote_induced,
+                                       plan_box1_start, plan_box1_ready, box1_induced,
+                                       plan_box2_start, plan_box2_ready, box2_induced))
+                continue
 
             # ── Reconstruir estado de los 3 slots de preparación ─────
             tote_times = self._st_tote_ev_t[i]
@@ -596,9 +608,28 @@ class LiveWindow:
             if front - length > self._belt_end_m: continue
             items.append(Item(kind="box" if kc == 0 else "tote",
                               front_x=front, length=length))
+        items.sort(key=lambda it: it.front_x, reverse=True)
+        for j in range(1, len(items)):
+            leader = items[j - 1]
+            follower = items[j]
+            max_front = leader.rear_x
+            if follower.front_x > max_front:
+                follower.front_x = max_front
         return snap, items
 
     # ── Helpers de posición con velocidades por tramo ─────────────────
+
+    def _motor_segment_index(self, x: float) -> int:
+        pos = self._motor_positions_m
+        n = len(pos)
+        if n <= 1:
+            return 0
+        if x < pos[0]:
+            return -1
+        for i in range(n - 1, -1, -1):
+            if x >= pos[i]:
+                return i
+        return n - 1
 
     def _position_after(self, x0: float, dt: float) -> float:
         """Posición de un ítem tras dt segundos desde x0, aplicando velocidades por motor."""
@@ -606,20 +637,13 @@ class LiveWindow:
         t_rem = dt
         pos = self._motor_positions_m
         spd = self._motor_speeds_mps
-        n = len(pos)
         while t_rem > 1e-9:
-            seg = 0
-            for i in range(1, n):
-                if x >= pos[i]:
-                    seg = i
-            speed = spd[min(seg, len(spd) - 1)]
+            seg = self._motor_segment_index(x)
+            speed = (BELT_SPEED_MPM / 60.0) if seg < 0 else spd[min(seg, len(spd) - 1)]
             if speed <= 0:
                 break
-            next_b = None
-            for i in range(1, n):
-                if pos[i] > x:
-                    next_b = pos[i]
-                    break
+            next_idx = seg + 1
+            next_b = pos[next_idx] if 0 <= next_idx < len(pos) and pos[next_idx] > x else None
             if next_b is None:
                 x += speed * t_rem
                 break
@@ -639,21 +663,14 @@ class LiveWindow:
         x = x0
         pos = self._motor_positions_m
         spd = self._motor_speeds_mps
-        n = len(pos)
         remaining = target_x - x0
         while remaining > 1e-9:
-            seg = 0
-            for i in range(1, n):
-                if x >= pos[i]:
-                    seg = i
-            speed = spd[min(seg, len(spd) - 1)]
+            seg = self._motor_segment_index(x)
+            speed = (BELT_SPEED_MPM / 60.0) if seg < 0 else spd[min(seg, len(spd) - 1)]
             if speed <= 0:
                 return float('inf')
-            next_b = None
-            for i in range(1, n):
-                if pos[i] > x:
-                    next_b = pos[i]
-                    break
+            next_idx = seg + 1
+            next_b = pos[next_idx] if 0 <= next_idx < len(pos) and pos[next_idx] > x else None
             if next_b is None or next_b >= target_x:
                 t += remaining / speed
                 break
@@ -665,44 +682,40 @@ class LiveWindow:
 
     # ── Recalcular con nuevas velocidades de motor ────────────────────
 
-    def _recalculate(self) -> None:
-        speeds = []
-        for v in self._motor_speed_vars:
-            try:
-                speeds.append(max(1.0, float(v.get())))
-            except (tk.TclError, ValueError):
-                speeds.append(22.0)
-        from ..core.engine import Engine
-        new_engine = Engine(**{**self._engine_ref._init_kwargs, 'motor_speeds_mpm': speeds})
-        self._engine_ref = new_engine
-        self._ready = False
-        self._t = 0.0
-        self._t_var.set(0.0)
-        self._slider.config(state="disabled")
-        self._status_var.set("Recalculando...")
-        self.root.after(50, self._do_recalculate)
-
-    def _do_recalculate(self) -> None:
-        self.root.update()
-        eng = self._engine_ref
-        steps = int(eng.duration_s / DT_S) + 1
-        done = 0
-        while done < steps:
-            n = min(50_000, steps - done)
-            eng.step(n)
-            done += n
-            pct = done / steps * 100
-            self._status_var.set(f"Recalculando... {pct:.0f}%")
-            if done % 200_000 == 0:
-                self.root.update_idletasks()
-        rec = record_engine(eng)
-        self._setup_record(rec)
-        self._ready = True
-        self._slider.config(state="normal")
-        self._status_var.set("Simulando...")
-        self._last = time.perf_counter()
-
     # ── Controles ────────────────────────────────────────────────────
+
+    def _station_timer_from_plan(self, si: int, t_s: float):
+        starts = self._st_plan_starts[si]
+        if not starts:
+            return None
+
+        plan_idx = bisect.bisect_right(starts, t_s) - 1
+        if plan_idx < 0:
+            return None
+
+        cycle_start, tote_start, tote_ready, box1_start, box1_ready, box2_start, box2_ready, _n_boxes, packages_only = self._st_plan_rows[si][plan_idx]
+        next_cycle_start = starts[plan_idx + 1] if plan_idx + 1 < len(starts) else float("inf")
+        t_cap = min(t_s, next_cycle_start)
+
+        tote_lo = bisect.bisect_left(self._st_tote_ev_t[si], cycle_start)
+        tote_hi = bisect.bisect_left(self._st_tote_ev_t[si], t_cap)
+        box_lo = bisect.bisect_left(self._st_box_ev_t[si], cycle_start)
+        box_hi = bisect.bisect_left(self._st_box_ev_t[si], t_cap)
+
+        tote_induced = False if packages_only else (tote_hi - tote_lo) > 0
+        box_count = box_hi - box_lo
+        if packages_only:
+            box1_induced = False
+            box2_induced = False
+        else:
+            box1_induced = box_count > 0
+            box2_induced = box_count > 1
+
+        return (
+            tote_start, tote_ready, tote_induced,
+            box1_start, box1_ready, box1_induced,
+            box2_start, box2_ready, box2_induced,
+        )
 
     def _on_zoom(self, event) -> None:
         factor = 1.1 if event.delta > 0 else (1.0 / 1.1)

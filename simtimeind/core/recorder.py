@@ -85,12 +85,14 @@ def to_dict(engine: Engine) -> dict:
             [list(iv) for iv in st.blocked_intervals]
             for st in engine.stations
         ],
+        "plan_events": [list(ev) for ev in getattr(engine, "plan_events", [])],
         "events": engine.events,
         "counters": {
             "inserted_total": engine.inserted_total,
             "inserted_boxes": engine.inserted_boxes,
             "inserted_totes": engine.inserted_totes,
         },
+        "count_events": [list(ev) for ev in getattr(engine, "count_events", [])],
     }
 
 
@@ -158,12 +160,14 @@ def save(engine: Engine, path: str) -> None:
             [list(iv) for iv in st.blocked_intervals]
             for st in engine.stations
         ],
+        "plan_events": [list(ev) for ev in getattr(engine, "plan_events", [])],
         "events": engine.events,
         "counters": {
             "inserted_total": engine.inserted_total,
             "inserted_boxes": engine.inserted_boxes,
             "inserted_totes": engine.inserted_totes,
         },
+        "count_events": [list(ev) for ev in getattr(engine, "count_events", [])],
     }
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
