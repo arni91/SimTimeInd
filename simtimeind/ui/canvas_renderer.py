@@ -14,7 +14,7 @@ from ..core.constants import (
     COLOR_KPI_TOTE,
     WAIT_BLOCKED_THRESHOLD_S,
     BELT_SPEED_MPM, TOTE_LEN_M, BOX_MEAN_M, BOX_MIN_M, BOX_MAX_M,
-    MOTOR_POSITIONS_M, MOTOR_SPEED_MPM,
+    MOTOR_POSITIONS_M, MOTOR_SPEEDS_MPM,
     CYCLE_MEAN_M01_M07_S, CYCLE_MEAN_M08_M14_S, CYCLE_MEAN_M15_M21_S,
     M22_CYCLE_MEAN_S, M22_PKG_H,
     SIM_MEAN_CYCLE_S, SIM_TOTAL_TOTES_H, SIM_TOTAL_BOXES_H, SIM_TOTAL_H,
@@ -63,14 +63,15 @@ class CanvasRenderer:
         self.tgt_total    = target_total_h
         self.tgt_boxes    = target_boxes_h
         self.tgt_totes    = target_totes_h
-        self.duration_s   = duration_s
-        self.warmup_s     = warmup_s
-        self.view_label   = view_label
-        self._tick        = 0
+        self.duration_s       = duration_s
+        self.warmup_s         = warmup_s
+        self.view_label       = view_label
+        self.motor_speeds_mpm = list(MOTOR_SPEEDS_MPM)
+        self._tick            = 0
         self._replay_cycle_mean: float = 0.0
 
     def _px(self, x_m):
-        return int(60 + (x_m - self.view_start) * self.scale)
+        return 60.0 + (x_m - self.view_start) * self.scale
 
     def _in_view(self, x_m):
         return self.view_start - 1.0 <= x_m <= self.view_end + 1.0
@@ -88,7 +89,7 @@ class CanvasRenderer:
         c.delete("all")
         self._draw_background()
         self._draw_info_bar()
-        self._draw_belt()
+        self._draw_belt(snap)
         self._draw_counter_marker(snap)
         self._draw_items(items)
         self._draw_motors()
@@ -107,9 +108,10 @@ class CanvasRenderer:
         c.create_rectangle(0, y, CANVAS_W, y + bh, fill="#0D1018", outline="")
         c.create_line(0, y + bh, CANVAS_W, y + bh, fill=COLOR_PANEL_BORDER, width=1)
 
-        belt_mps = BELT_SPEED_MPM / 60.0
+        min_speed = min(self.motor_speeds_mpm) if self.motor_speeds_mpm else BELT_SPEED_MPM
+        max_speed = max(self.motor_speeds_mpm) if self.motor_speeds_mpm else BELT_SPEED_MPM
         info = [
-            ("Cinta",   f"{BELT_SPEED_MPM:.0f} m/min  ({belt_mps:.2f} m/s)"),
+            ("Cinta",   f"{min_speed:.0f}-{max_speed:.0f} m/min por tramos"),
             ("Cubeta",  f"{TOTE_LEN_M*1000:.0f} mm"),
             ("Paquete", f"{BOX_MEAN_M*1000:.0f} mm media  ({BOX_MIN_M*1000:.0f}-{BOX_MAX_M*1000:.0f} mm)"),
             ("Gap",     f"{self.eff_gap_m*1000:.0f} mm"),
@@ -126,11 +128,40 @@ class CanvasRenderer:
                           font=_FONT_SANS_XS, anchor="w")
             cx += len(val) * 6 + 20
 
-    def _draw_belt(self):
+    def _draw_belt(self, snap):
         c = self.canvas
         x0, x1 = self._px(self.view_start), self._px(self.view_end)
         by, h = BELT_Y, self._belt_half_h()
         c.create_rectangle(x0, by - h, x1, by + h, fill=COLOR_BELT, outline=COLOR_BELT_HL, width=1)
+
+        motor_bounds = list(MOTOR_POSITIONS_M)
+        if not motor_bounds:
+            motor_bounds = [self.view_start]
+        seg_starts = [self.view_start]
+        seg_starts.extend(x for x in motor_bounds if self.view_start < x < self.view_end)
+        seg_starts = sorted(set(seg_starts))
+        seg_ends = seg_starts[1:] + [self.view_end]
+
+        for idx, seg_start in enumerate(seg_starts):
+            seg_end = seg_ends[idx]
+            px0 = self._px(max(seg_start, self.view_start))
+            px1 = self._px(min(seg_end, self.view_end))
+            if px1 <= px0:
+                continue
+
+            if idx == 0:
+                speed_mpm = BELT_SPEED_MPM
+            else:
+                speed_mpm = self.motor_speeds_mpm[min(idx - 1, len(self.motor_speeds_mpm) - 1)]
+            speed_ratio = max(0.15, speed_mpm / max(1.0, BELT_SPEED_MPM))
+            band_col = _lighten(COLOR_BELT, int(10 * min(speed_ratio, 1.8)))
+
+            c.create_rectangle(px0, by - h + 1, px1, by + h - 1, fill=band_col, outline="")
+
+            if idx < len(seg_starts) - 1:
+                c.create_line(px1, by - h + 2, px1, by + h - 2,
+                              fill=COLOR_PANEL_BORDER, width=1, dash=(3, 3))
+
         c.create_line(x0, by, x1, by, fill="#252830", width=1, dash=(4, 8))
 
     def _draw_counter_marker(self, snap):
@@ -351,13 +382,17 @@ class CanvasRenderer:
             # pequeño tick en la cinta
             c.create_line(px - 4, line_y2, px + 4, line_y2, fill=col, width=2)
 
-            # caja con etiqueta y velocidad
+            # caja con etiqueta y velocidad (clicable si no es teórico)
+            tag = f"motor_{i}"
             bx = px - box_w // 2
             c.create_rectangle(bx, box_top, bx + box_w, box_top + box_h,
-                                fill=_COL_MOTOR_BG, outline=col, width=1)
+                                fill=_COL_MOTOR_BG, outline=col, width=1,
+                                tags=(tag,))
+            spd = self.motor_speeds_mpm[i] if i < len(self.motor_speeds_mpm) else MOTOR_SPEEDS_MPM[0]
             c.create_text(px, box_top + box_h // 2,
-                          text=f"M{num}  {MOTOR_SPEED_MPM:.0f}m/min",
-                          fill=col, font=fnt, anchor="center")
+                          text=f"M{num}  {spd:.0f}m/min",
+                          fill=col, font=fnt, anchor="center",
+                          tags=(tag,))
 
     def _draw_dimension_lines(self):
         c  = self.canvas
@@ -382,7 +417,7 @@ class CanvasRenderer:
             c.create_line(px0, row_y, px1, row_y, fill=col_dim, width=1)
             c.create_line(px0, row_y - tick_h, px0, row_y + tick_h, fill=col_dim, width=1)
             c.create_line(px1, row_y - tick_h, px1, row_y + tick_h, fill=col_dim, width=1)
-            mid = (px0 + px1) // 2
+            mid = (px0 + px1) / 2.0
             c.create_text(mid, row_y - 5, text=f"{x1m - x0m:.2f}m",
                           fill=col_text, font=fnt_sm, anchor="s")
 
@@ -395,7 +430,7 @@ class CanvasRenderer:
                           fill=col_total, width=1)
             c.create_line(px_last,  tot_y - tick_h - 2, px_last,  tot_y + tick_h + 2,
                           fill=col_total, width=1)
-            mid_tot = (px_first + px_last) // 2
+            mid_tot = (px_first + px_last) / 2.0
             c.create_text(mid_tot, tot_y - 5,
                           text=f"M1-M22 = {xs[-1] - xs[0]:.2f} m",
                           fill=col_total, font=fnt_tot, anchor="s")

@@ -1,5 +1,6 @@
 # core/engine.py
 from __future__ import annotations
+import bisect
 import random
 from collections import deque
 from typing import Any
@@ -23,6 +24,8 @@ from .constants import (
     M22_CYCLE_MAX_S,
     TOTE_PREP_MIN_S,
     TOTE_PREP_MAX_S,
+    MOTOR_POSITIONS_M,
+    MOTOR_SPEEDS_MPM,
 )
 from .models import Item, Station, SimSnapshot
 from .belt import build_station_positions, find_best_insert_x
@@ -51,6 +54,7 @@ class Engine:
         target_boxes_h: float = TARGET_BOXES_H,
         target_totes_h: float = TARGET_TOTES_H,
         warmup_s: float = 0.0,
+        motor_speeds_mpm: list | None = None,
     ):
         # Fijar semilla concreta (para poder recrear el engine idéntico)
         if seed is None:
@@ -63,6 +67,7 @@ class Engine:
             p2=p2, p3=p3, box_sd_m=box_sd_m, push_enabled=push_enabled,
             target_total_h=target_total_h, target_boxes_h=target_boxes_h,
             target_totes_h=target_totes_h, warmup_s=warmup_s,
+            motor_speeds_mpm=list(motor_speeds_mpm or MOTOR_SPEEDS_MPM),
         )
         self.n               = int(stations)
         self.duration_s      = float(duration_s)
@@ -88,6 +93,8 @@ class Engine:
         self.last_x         = self.station_xs[-1]
         self.belt_end_m     = self.last_x + 12.0
         self.belt_speed_mps = BELT_SPEED_MPM / 60.0
+        self.motor_positions  = list(MOTOR_POSITIONS_M)
+        self.motor_speeds_mps = [s / 60.0 for s in (motor_speeds_mpm or MOTOR_SPEEDS_MPM)]
 
         self.stations = [
             Station(sid=f"M{i+1:02d}", x=self.station_xs[i], idx=i)
@@ -107,10 +114,12 @@ class Engine:
         self.inserted_boxes_m22 = 0   # boxes solo de M22 (mesa solo-paquetes)
         self._insert_window: deque = deque()   # (t, kind) para tasa deslizante
         self.events         = []
+        self.plan_events    = []
         # contadores en punto de conteo (COUNTER_X_M)
         self.counted_total = 0
         self.counted_boxes = 0
         self.counted_totes = 0
+        self.count_events = []
         self.counter_x     = COUNTER_X_M
         self.counter_first_t = -1.0   # momento en que llego el primer item
         self.cycle_count_total = 0
@@ -119,6 +128,14 @@ class Engine:
         self.cycle_max_total   = 0.0
         # orden de proceso de estaciones (se baraja cada tick para equidad)
         self._station_order: list[int] = list(range(self.n))
+
+    def _speed_at(self, x: float) -> float:
+        """Velocidad de la cinta (m/s) en la posición x según el motor que la mueve."""
+        if x < self.motor_positions[0]:
+            return BELT_SPEED_MPM / 60.0
+        idx = bisect.bisect_right(self.motor_positions, x) - 1
+        idx = max(0, min(idx, len(self.motor_speeds_mps) - 1))
+        return self.motor_speeds_mps[idx]
 
     def _sample_box_length(self):
         for _ in range(30):
@@ -146,6 +163,20 @@ class Engine:
         self.cycle_sum_total   += T
         self.cycle_min_total    = min(self.cycle_min_total, T)
         self.cycle_max_total    = max(self.cycle_max_total, T)
+
+    def _record_plan_event(self, st) -> None:
+        self.plan_events.append([
+            self.t,
+            st.idx,
+            st.plan_tote_start,
+            st.plan_tote_ready,
+            st.plan_box1_start,
+            st.plan_box1_ready,
+            st.plan_box2_start,
+            st.plan_box2_ready,
+            st.plan_n_boxes,
+            1 if st.packages_only else 0,
+        ])
 
     def _plan_new_cycle(self, st):
         if st.cycles_started_once:
@@ -176,6 +207,7 @@ class Engine:
             st.plan_box1_start = t0;    st.plan_box1_ready = t0 + T
             st.plan_box2_start = -1.0;  st.plan_box2_ready = -1.0
             st.plan_n_boxes    = 1
+            self._record_plan_event(st)
             return
 
         # ── ciclo normal (M01–M21) ────────────────────────────────────
@@ -232,6 +264,7 @@ class Engine:
         st.plan_box2_start = st.box_queue[0] if k >= 2 else -1.0  # box2 empieza cuando box1 está listo
         st.plan_box2_ready = st.box_queue[1] if k >= 2 else -1.0
         st.plan_n_boxes    = k
+        self._record_plan_event(st)
 
     def fresh(self) -> Engine:
         """Devuelve un Engine nuevo con los mismos parámetros y semilla."""
@@ -242,22 +275,34 @@ class Engine:
             if self.t >= self.duration_s:
                 return
 
-            t  = self.t
-            dx = self.belt_speed_mps * DT_S
+            t = self.t
+            past_warmup = t >= self.warmup_s
+            prev_fronts = {id(it): it.front_x for it in self.items}
+            for it in self.items:
+                spd  = self._speed_at(it.front_x)
+                dx   = spd * DT_S
+                it.front_x += dx
+
+            self.items.sort(key=lambda it: it.front_x, reverse=True)
+            for i in range(1, len(self.items)):
+                leader = self.items[i - 1]
+                follower = self.items[i]
+                max_front = leader.rear_x
+                if follower.front_x > max_front:
+                    follower.front_x = max_front
 
             for it in self.items:
-                it.front_x += dx
-            # detectar ítems que cruzan el punto de conteo en este tick
-            # solo se cuentan después del calentamiento (warmup_s)
-            past_warmup = t >= self.warmup_s
-            for it in self.items:
-                if it.front_x >= self.counter_x and (it.front_x - dx) < self.counter_x:
-                    if past_warmup:
-                        if self.counter_first_t < 0:
-                            self.counter_first_t = self.t
-                        self.counted_total += 1
-                        if it.kind == "box":  self.counted_boxes += 1
-                        else:                 self.counted_totes += 1
+                prev = prev_fronts.get(id(it), it.front_x)
+                if past_warmup and prev < self.counter_x <= it.front_x:
+                    if self.counter_first_t < 0:
+                        self.counter_first_t = self.t
+                    self.counted_total += 1
+                    if it.kind == "box":
+                        self.counted_boxes += 1
+                        self.count_events.append((self.t, 0))
+                    else:
+                        self.counted_totes += 1
+                        self.count_events.append((self.t, 1))
             self.items = [it for it in self.items if it.rear_x <= self.belt_end_m]
 
             for st in self.stations:
@@ -275,8 +320,7 @@ class Engine:
 
             # Últimas mesas primero: tienen el belt más lleno y necesitan prioridad
             # Las primeras mesas tienen espacio casi vacío cerca suyo de todos modos
-            self.rng.shuffle(self._station_order)
-            for idx in sorted(self._station_order, reverse=True):
+            for idx in range(self.n - 1, -1, -1):
                 st = self.stations[idx]
                 if not st.started:
                     continue

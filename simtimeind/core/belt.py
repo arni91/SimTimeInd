@@ -36,7 +36,8 @@ def can_insert(items: list, x: float, length: float, gap: float) -> bool:
     zone_min = x - length - gap
     zone_max = x + gap
     for it in items:
-        if it.front_x > zone_min and it.rear_x < zone_max:
+        rear_x = it.front_x - it.length
+        if it.front_x > zone_min and rear_x < zone_max:
             return False
     return True
 
@@ -85,11 +86,11 @@ def find_best_insert_x(items: list, x_center: float, length: float,
     for fx in candidates:
         if fx < fx_min or fx > fx_max:
             continue
-        if not can_insert(items, fx, length, gap):
+        if not can_insert(relevant, fx, length, gap):
             continue
 
         min_dist = min(
-            (min(abs(fx - it.front_x), abs(fx - length - it.rear_x))
+            (min(abs(fx - it.front_x), abs(fx - length - (it.front_x - it.length)))
              for it in relevant),
             default=half_range,
         )

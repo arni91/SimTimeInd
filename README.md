@@ -25,11 +25,11 @@
 
 ## 📦 Descripción
 
-SimTimeInd simula el comportamiento de una **cinta de inducción de paquetería** con hasta 22 mesas de operarios. Modela el ciclo de trabajo de cada operario (preparación de cubetas y paquetes, inducción en cinta, esperas por falta de hueco), el flujo de ítems a 22 m/min, y las métricas de producción en tiempo real: bultos/hora, cubetas/hora, paquetes/hora y tiempos de espera.
+SimTimeInd simula el comportamiento de una **cinta de inducción de paquetería** con hasta 22 mesas de operarios. Modela el ciclo de trabajo de cada operario (preparación de cubetas y paquetes, inducción en cinta, esperas por falta de hueco), el flujo de ítems por tramos de cinta con velocidad configurable por motor, y las métricas de producción en tiempo real: bultos/hora, cubetas/hora, paquetes/hora y tiempos de espera.
 
 El simulador permite tres modos de operación:
 
-- **Live** — pre-calcula la simulación completa al arrancar y permite navegar libremente por el tiempo con un slider, pausar y cambiar velocidad.
+- **Live** — antes de arrancar permite configurar la velocidad de cada motor, pre-calcula la simulación completa y permite navegar libremente por el tiempo con un slider, pausar y cambiar velocidad de reproducción.
 - **Batch** — sin UI, máxima velocidad, guarda la grabación en `.sim.gz`.
 - **Replay** — reproduce grabaciones `.sim.gz` existentes.
 
@@ -122,6 +122,12 @@ Cada ciclo de duración `T` sigue esta secuencia:
 | 45 / 67 / 90 % | Paquetes listos (1, 2 o 3 según probabilidades) |
 | 100 % | Nuevo ciclo cuando: cubeta inductada + paquetes inductados + tiempo cumplido |
 
+La preparación de los paquetes es **independiente de la inducción**:
+
+- cuando la cubeta termina de prepararse, el contador del siguiente paquete empieza aunque la cubeta siga pendiente de inducir
+- si hay segundo paquete, su contador empieza cuando le toca según el plan del ciclo, aunque siga habiendo bultos anteriores pendientes en cinta
+- en la vista live, los temporizadores se reconstruyen desde el plan real del ciclo, no solo desde los bultos ya inducidos
+
 **Distribución de paquetes por ciclo:**
 
 | k paquetes | Probabilidad |
@@ -142,6 +148,17 @@ Cada operario tiene un ciclo propio muestreado de una distribución normal `N(me
 
 Los ítems se cuentan al cruzar `x = 50.0 m` (~5 m después de M22). Solo se cuentan ítems cuyo tiempo de cruce supera el warmup.
 
+### ⚙️ Motores y tramos de cinta
+
+La cinta se divide en tramos gobernados por motores:
+
+- antes de `M1`, la cinta va fija a `22 m/min`
+- el tramo `M1 -> M2` usa la velocidad configurada en `M1`
+- el tramo `M2 -> M3` usa la velocidad configurada en `M2`
+- y así sucesivamente hasta el último motor
+
+El modelo visual y el motor de simulación usan la misma lógica. Si un tramo es más lento, los bultos se comprimen y se apilotonan; si es más rápido, aumentan los huecos entre ellos.
+
 ### 🎨 Colores semánticos
 
 | Elemento | Color |
@@ -158,20 +175,24 @@ Los ítems se cuentan al cruzar `x = 50.0 m` (~5 m después de M22). Solo se cue
 
 ### 📐 Zonas de la ventana
 
-**Barra superior** — parámetros de la instalación: velocidad de cinta, gap, dimensiones de ítems, buffer.
+**Pantalla previa de arranque** — antes de abrir la simulación live se pide la velocidad de cada motor. Esas velocidades se fijan al inicio de la simulación.
 
-**Zona de cinta** — representación 2D con paquetes (azul) y cubetas (naranja) deslizándose, indicadores de estado por mesa (gris = normal, rojo = bloqueada), posición de motores (líneas teal) y cotas de distancia entre mesas.
+**Barra superior** — parámetros de la instalación: rango de velocidades de cinta por tramos, gap, dimensiones de ítems, buffer.
+
+**Zona de cinta** — representación 2D con paquetes (azul) y cubetas (naranja) deslizándose, indicadores de estado por mesa (gris = normal, rojo = bloqueada), posición de motores (líneas teal) y cotas de distancia entre mesas. La velocidad efectiva se aprecia en el movimiento de los bultos: compresión en tramos lentos y apertura de huecos en tramos rápidos.
 
 **Slots de preparación por mesa** — debajo de cada mesa (M01–M22) se muestran hasta 3 recuadros que representan el estado del ciclo actual en orden secuencial (de arriba a abajo):
 
 | Fila | Elemento | Color | Estado |
 |------|----------|-------|--------|
 | 0 | Cubeta vacía | Naranja | Preparando (contador) → Inducida (OK) |
-| 1 | Paquete 1 | Azul | Aparece solo tras cubeta inducida |
-| 2 | Paquete 2 | Azul | Aparece solo tras paquete 1 inducido |
+| 1 | Paquete 1 | Azul | Su preparación sigue aunque la cubeta siga pendiente de inducir |
+| 2 | Paquete 2 | Azul | Si existe, sigue su propio contador cuando le toca empezar |
 | 3 | Bloqueo | Rojo | Solo cuando el ítem listo no puede inducir por falta de hueco |
 
-Los paquetes aparecen estrictamente en orden top→bottom; el contador de bloqueo (fila 3) solo se activa cuando el ítem ya está preparado pero bloqueado por la cinta. En mesas con alta congestión (M20, M21) donde los paquetes pueden inductarse antes que la cubeta, el display muestra la cubeta congelada + bloqueo en lugar de un estado inconsistente.
+Los paquetes aparecen estrictamente en orden top→bottom; el contador de bloqueo (fila 3) solo se activa cuando ya existe al menos un bulto del ciclo listo para inducir y no puede entrar en cinta. En mesas con alta congestión (M20, M21) donde los paquetes pueden inductarse antes que la cubeta, el display muestra la cubeta congelada + bloqueo en lugar de un estado inconsistente.
+
+**Caso especial M22** — `M22` solo prepara e induce paquetes a `160 bultos/h`. No muestra cubeta y no debe quedarse en `OK`: en cuanto induce el paquete, arranca el siguiente ciclo continuo de paquetes.
 
 **Panel KPI inferior** — tres columnas:
 
@@ -182,7 +203,7 @@ Los paquetes aparecen estrictamente en orden top→bottom; el contador de bloque
 | **CICLOS COMPLETADOS** | Ciclos post-calentamiento por mesa (M01–M22); valores en blanco sobre fondo oscuro |
 | **ESPERAS** | Tiempo total acumulado, media por mesa, peor mesa, desglose por estación |
 
-**Barra de control** — Play/Pausa, multiplicador de velocidad (0.1×–50×) y slider de tiempo para navegar a cualquier instante de la simulación.
+**Barra de control** — Play/Pausa, multiplicador de velocidad de reproducción (0.1×–50×) y slider de tiempo para navegar a cualquier instante de la simulación.
 
 ### 🔍 Zoom y navegación
 
@@ -196,14 +217,14 @@ Los paquetes aparecen estrictamente en orden top→bottom; el contador de bloque
 
 ### ⏩ Scrubbing (navegación temporal)
 
-Al abrir la ventana, la simulación se pre-calcula completa en segundo plano mostrando "Simulando...". Al terminar, el slider queda habilitado. Arrastrar el slider reconstruye el estado de la cinta en O(log n) usando arrays de prefijos sobre los eventos — sin re-simular.
+Al abrir la ventana, la simulación se pre-calcula completa en segundo plano mostrando "Simulando...". Al terminar, el slider queda habilitado. Arrastrar el slider reconstruye el estado de la cinta en O(log n) usando arrays de prefijos sobre los eventos y sobre el plan real de cada ciclo — sin re-simular.
 
 ---
 
 ## 🚀 Instalación y uso
 
 ```bash
-# Simulación en vivo (configuración por defecto, semilla aleatoria)
+# Simulación en vivo (se abrirá una pantalla previa para configurar motores)
 python main.py
 
 # Con parámetros personalizados
