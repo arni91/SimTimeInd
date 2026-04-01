@@ -52,7 +52,8 @@ class CanvasRenderer:
 
     def __init__(self, canvas, view_start, view_end, scale, station_list,
                  push_enabled, effective_gap_m, target_total_h, target_boxes_h,
-                 target_totes_h, duration_s, warmup_s=0.0, view_label="full"):
+                 target_totes_h, duration_s, warmup_s=0.0, view_label="full",
+                 buffer_per_station=1):
         self.canvas       = canvas
         self.view_start   = view_start
         self.view_end     = view_end
@@ -67,6 +68,7 @@ class CanvasRenderer:
         self.warmup_s         = warmup_s
         self.view_label       = view_label
         self.motor_speeds_mpm = list(MOTOR_SPEEDS_MPM)
+        self.buffer_per_station = max(1, int(buffer_per_station))
         self._tick            = 0
         self._replay_cycle_mean: float = 0.0
 
@@ -116,7 +118,7 @@ class CanvasRenderer:
             ("Paquete", f"{BOX_MEAN_M*1000:.0f} mm media  ({BOX_MIN_M*1000:.0f}-{BOX_MAX_M*1000:.0f} mm)"),
             ("Gap",     f"{self.eff_gap_m*1000:.0f} mm"),
             ("Push",    "ON (gap 0mm si no cabe)" if self.push_enabled else "OFF"),
-            ("Buffer",  "1 cubeta/mesa"),
+            ("Buffer",  f"{self.buffer_per_station} cubeta{'s' if self.buffer_per_station != 1 else ''}/mesa"),
         ]
         cx = 12
         ty = y + bh // 2
@@ -229,10 +231,10 @@ class CanvasRenderer:
         wait_map = {sid: (acc_s, bn, wn)
                     for sid, x, acc_s, bn, wn in snap.wait_per_station}
 
-        # Nuevo formato: (sid, wait_now, pts, ptr, ti, pb1s, pb1r, b1i, pb2s, pb2r, b2i)
+        # Formato normal: 2 ciclos x 3 slots; M22 usa 2 slots de paquete
         timer_map = {}
         for row in snap.station_timers:
-            if len(row) >= 11:
+            if len(row) >= 20:
                 timer_map[row[0]] = row[1:]   # todo menos sid
 
         for i, st in enumerate(self.stations):
@@ -246,14 +248,20 @@ class CanvasRenderer:
 
             acc_s, blocked_now, wait_now_s = wait_map.get(sid, (0.0, False, 0.0))
             td = timer_map.get(sid)
-            if td and len(td) >= 10:
+            if td and len(td) >= 19:
                 (_, plan_tote_start, plan_tote_ready, tote_induced,
                  plan_box1_start, plan_box1_ready, box1_induced,
-                 plan_box2_start, plan_box2_ready, box2_induced) = td
+                 plan_box2_start, plan_box2_ready, box2_induced,
+                 plan_tote2_start, plan_tote2_ready, tote2_induced,
+                 plan_box12_start, plan_box12_ready, box12_induced,
+                 plan_box22_start, plan_box22_ready, box22_induced) = td
             else:
                 plan_tote_start = plan_tote_ready = -1.0; tote_induced  = False
                 plan_box1_start = plan_box1_ready = -1.0; box1_induced  = False
                 plan_box2_start = plan_box2_ready = -1.0; box2_induced  = False
+                plan_tote2_start = plan_tote2_ready = -1.0; tote2_induced = False
+                plan_box12_start = plan_box12_ready = -1.0; box12_induced = False
+                plan_box22_start = plan_box22_ready = -1.0; box22_induced = False
 
             is_blocked = wait_now_s > 0.0
             col_line   = COLOR_STATION_OK
@@ -338,13 +346,22 @@ class CanvasRenderer:
                 _draw_prep_slot(0, plan_tote_start, plan_tote_ready, tote_induced, COLOR_TOTE, "#1A1D23")
                 _draw_prep_slot(1, plan_box1_start,  plan_box1_ready,  box1_induced,  COLOR_BOX,  "#FFFFFF")
                 _draw_prep_slot(2, plan_box2_start,  plan_box2_ready,  box2_induced,  COLOR_BOX,  "#FFFFFF")
+                if self.buffer_per_station >= 2:
+                    _draw_prep_slot(3, plan_tote2_start, plan_tote2_ready, tote2_induced, COLOR_TOTE, "#1A1D23")
+                    _draw_prep_slot(4, plan_box12_start, plan_box12_ready, box12_induced, COLOR_BOX, "#FFFFFF")
+                    _draw_prep_slot(5, plan_box22_start, plan_box22_ready, box22_induced, COLOR_BOX, "#FFFFFF")
             else:
                 _draw_prep_slot(0, plan_box1_start, plan_box1_ready, box1_induced, COLOR_BOX, "#FFFFFF")
+                if self.buffer_per_station >= 2:
+                    _draw_prep_slot(1, plan_box12_start, plan_box12_ready, box12_induced, COLOR_BOX, "#FFFFFF")
 
             # ── 4º recuadro: contador de bloqueo (solo cuando el ciclo está bloqueado) ──
             # Aparece debajo de los slots de prep cuando wait_now_s > 0
             if is_blocked:
-                block_row = 3 if not pkg_only else 1
+                if not pkg_only:
+                    block_row = 6 if self.buffer_per_station >= 2 else 3
+                else:
+                    block_row = 2 if self.buffer_per_station >= 2 else 1
                 by4   = by + 57 + block_row * (SH + SGAP)
                 by4e  = by4 + SH
                 mid4  = (by4 + by4e) // 2

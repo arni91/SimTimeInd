@@ -76,6 +76,7 @@ def to_dict(engine: Engine) -> dict:
             "mean_box_s":           0.0,
             "motor_positions_m":    list(getattr(engine, "motor_positions", MOTOR_POSITIONS_M)),
             "motor_speeds_mpm":     [s * 60.0 for s in getattr(engine, "motor_speeds_mps", [v/60 for v in MOTOR_SPEEDS_MPM])],
+            "buffer_per_station":   int(getattr(engine, "buffer_per_station", 1)),
         },
         "stations": [
             {"sid": st.sid, "x": st.x, "start_at": st.start_at}
@@ -151,6 +152,7 @@ def save(engine: Engine, path: str) -> None:
             "cycle_stats_stations": cycle_stats_st,
             "motor_positions_m":  list(getattr(engine, "motor_positions", MOTOR_POSITIONS_M)),
             "motor_speeds_mpm":   [s * 60.0 for s in getattr(engine, "motor_speeds_mps", [v/60 for v in MOTOR_SPEEDS_MPM])],
+            "buffer_per_station": int(getattr(engine, "buffer_per_station", 1)),
         },
         "stations": [
             {"sid": st.sid, "x": st.x, "start_at": st.start_at}

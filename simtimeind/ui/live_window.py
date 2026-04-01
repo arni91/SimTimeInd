@@ -146,8 +146,9 @@ class LiveWindow:
                  bg=COLOR_PANEL_BG, fg=COLOR_TEXT_SECONDARY,
                  font=("Consolas", 9)).pack(side="right", padx=10)
 
-        # Velocidades de motores: se guardan aquí, se editan clicando las cajitas del canvas
+        # Velocidades de motores usadas en la simulación
         self._motor_speeds_mpm: list[float] = [round(s * 60.0, 1) for s in engine.motor_speeds_mps]
+        self._buffer_per_station = int(getattr(engine, "buffer_per_station", 1))
 
         self.renderer = CanvasRenderer(
             canvas=self.canvas,
@@ -163,6 +164,7 @@ class LiveWindow:
             duration_s=engine.duration_s,
             warmup_s=engine.warmup_s,
             view_label=view,
+            buffer_per_station=self._buffer_per_station,
         )
 
         self._tick_n = 0
@@ -221,8 +223,10 @@ class LiveWindow:
         loaded_speeds = list(meta.get("motor_speeds_mpm", list(MOTOR_SPEEDS_MPM)))
         self._motor_speeds_mps  = [s / 60.0 for s in loaded_speeds]
         self._motor_speeds_mpm  = loaded_speeds
+        self._buffer_per_station = int(meta.get("buffer_per_station", self._buffer_per_station))
         if hasattr(self, "renderer"):
             self.renderer.motor_speeds_mpm = loaded_speeds
+            self.renderer.buffer_per_station = self._buffer_per_station
 
         self._ev_t = [float(e[0]) for e in self._events]
 
@@ -297,13 +301,46 @@ class LiveWindow:
             st_idx = int(row[1])
             if 0 <= st_idx < n_st:
                 self._st_plan_starts[st_idx].append(float(row[0]))
-                self._st_plan_rows[st_idx].append((
-                    float(row[0]),
-                    float(row[2]), float(row[3]),
-                    float(row[4]), float(row[5]),
-                    float(row[6]), float(row[7]),
-                    int(row[8]), bool(int(row[9])),
-                ))
+                if len(row) >= 12:
+                    cycle_id = int(row[2])
+                    slot_idx = int(row[3])
+                    offset = 4
+                    packages_only = bool(int(row[11]))
+                elif len(row) >= 11:
+                    cycle_id = int(row[2])
+                    slot_idx = 0
+                    offset = 3
+                    packages_only = bool(int(row[10]))
+                else:
+                    cycle_id = len(self._st_plan_rows[st_idx])
+                    slot_idx = 0
+                    offset = 2
+                    packages_only = bool(int(row[9]))
+                self._st_plan_rows[st_idx].append({
+                    "cycle_start": float(row[0]),
+                    "cycle_id": cycle_id,
+                    "slot_idx": slot_idx,
+                    "tote_start": float(row[offset + 0]),
+                    "tote_ready": float(row[offset + 1]),
+                    "box1_start": float(row[offset + 2]),
+                    "box1_ready": float(row[offset + 3]),
+                    "box2_start": float(row[offset + 4]),
+                    "box2_ready": float(row[offset + 5]),
+                    "n_boxes": int(row[offset + 6]),
+                    "packages_only": packages_only,
+                })
+
+        self._st_events_by_cycle: list[dict[int, dict[str, list[float]]]] = []
+        for si in range(n_st):
+            cycle_map: dict[int, dict[str, list[float]]] = {}
+            for ev in self._events:
+                if int(ev[1]) != si:
+                    continue
+                cycle_id = int(ev[5]) if len(ev) >= 6 else -1
+                bucket = cycle_map.setdefault(cycle_id, {"tote": [], "box": []})
+                kind = "tote" if int(ev[2]) == 1 else "box"
+                bucket[kind].append(float(ev[0]))
+            self._st_events_by_cycle.append(cycle_map)
 
         count_events: list[tuple[float, int]] = []
         if self._count_events_raw:
@@ -419,13 +456,7 @@ class LiveWindow:
             wait_per.append((st["sid"], st["x"], acc, False, wait_now))
             plan_timer = self._station_timer_from_plan(i, t_s)
             if plan_timer is not None:
-                (plan_tote_start, plan_tote_ready, tote_induced,
-                 plan_box1_start, plan_box1_ready, box1_induced,
-                 plan_box2_start, plan_box2_ready, box2_induced) = plan_timer
-                station_timers.append((st["sid"], wait_now,
-                                       plan_tote_start, plan_tote_ready, tote_induced,
-                                       plan_box1_start, plan_box1_ready, box1_induced,
-                                       plan_box2_start, plan_box2_ready, box2_induced))
+                station_timers.append((st["sid"], wait_now, *plan_timer))
                 continue
 
             # ── Reconstruir estado de los 3 slots de preparación ─────
@@ -562,7 +593,10 @@ class LiveWindow:
             station_timers.append((st["sid"], wait_now,
                                    plan_tote_start, plan_tote_ready, tote_induced,
                                    plan_box1_start, plan_box1_ready, box1_induced,
-                                   plan_box2_start, plan_box2_ready, box2_induced))
+                                   plan_box2_start, plan_box2_ready, box2_induced,
+                                   -1.0, -1.0, False,
+                                   -1.0, -1.0, False,
+                                   -1.0, -1.0, False))
 
         snap = SimSnapshot(
             t=t_floor,
@@ -685,37 +719,66 @@ class LiveWindow:
     # ── Controles ────────────────────────────────────────────────────
 
     def _station_timer_from_plan(self, si: int, t_s: float):
-        starts = self._st_plan_starts[si]
-        if not starts:
+        rows = self._st_plan_rows[si]
+        if not rows:
             return None
 
-        plan_idx = bisect.bisect_right(starts, t_s) - 1
-        if plan_idx < 0:
+        started = [row for row in rows if row["cycle_start"] <= t_s]
+        if not started:
             return None
 
-        cycle_start, tote_start, tote_ready, box1_start, box1_ready, box2_start, box2_ready, _n_boxes, packages_only = self._st_plan_rows[si][plan_idx]
-        next_cycle_start = starts[plan_idx + 1] if plan_idx + 1 < len(starts) else float("inf")
-        t_cap = min(t_s, next_cycle_start)
-
-        tote_lo = bisect.bisect_left(self._st_tote_ev_t[si], cycle_start)
-        tote_hi = bisect.bisect_left(self._st_tote_ev_t[si], t_cap)
-        box_lo = bisect.bisect_left(self._st_box_ev_t[si], cycle_start)
-        box_hi = bisect.bisect_left(self._st_box_ev_t[si], t_cap)
-
-        tote_induced = False if packages_only else (tote_hi - tote_lo) > 0
-        box_count = box_hi - box_lo
-        if packages_only:
-            box1_induced = False
-            box2_induced = False
-        else:
+        def _cycle_slots(row: dict):
+            events = self._st_events_by_cycle[si].get(row["cycle_id"], {"tote": [], "box": []})
+            tote_induced = (not row["packages_only"]) and any(ev_t <= t_s for ev_t in events["tote"])
+            box_count = sum(1 for ev_t in events["box"] if ev_t <= t_s)
             box1_induced = box_count > 0
             box2_induced = box_count > 1
+            return (
+                row["tote_start"], row["tote_ready"], tote_induced,
+                row["box1_start"], row["box1_ready"], box1_induced,
+                row["box2_start"], row["box2_ready"], box2_induced,
+            )
 
-        return (
-            tote_start, tote_ready, tote_induced,
-            box1_start, box1_ready, box1_induced,
-            box2_start, box2_ready, box2_induced,
-        )
+        if started[-1]["packages_only"]:
+            slot0_row = None
+            slot1_row = None
+            for row in started:
+                if int(row.get("slot_idx", 0)) == 0:
+                    slot0_row = row
+                else:
+                    slot1_row = row
+            slot0 = _cycle_slots(slot0_row) if slot0_row is not None else (
+                -1.0, -1.0, False, -1.0, -1.0, False, -1.0, -1.0, False
+            )
+            slot1 = _cycle_slots(slot1_row) if slot1_row is not None else (
+                -1.0, -1.0, False, -1.0, -1.0, False, -1.0, -1.0, False
+            )
+            first_slots = (
+                -1.0, -1.0, False,
+                slot0[3], slot0[4], slot0[5],
+                -1.0, -1.0, False,
+            )
+            second_slots = (
+                -1.0, -1.0, False,
+                slot1[3], slot1[4], slot1[5],
+                -1.0, -1.0, False,
+            )
+        else:
+            slot0_row = None
+            slot1_row = None
+            for row in started:
+                if int(row.get("slot_idx", 0)) == 0:
+                    slot0_row = row
+                else:
+                    slot1_row = row
+            first_slots = _cycle_slots(slot0_row) if slot0_row is not None else (
+                -1.0, -1.0, False, -1.0, -1.0, False, -1.0, -1.0, False
+            )
+            second_slots = _cycle_slots(slot1_row) if slot1_row is not None else (
+                -1.0, -1.0, False, -1.0, -1.0, False, -1.0, -1.0, False
+            )
+
+        return first_slots + second_slots
 
     def _on_zoom(self, event) -> None:
         factor = 1.1 if event.delta > 0 else (1.0 / 1.1)

@@ -34,7 +34,11 @@ class Station:
 
     # ── buffer de 2 cubetas ───────────────────────────────────────
     tote_queue_extra: list  = field(default_factory=list)   # buffer slot 2 (cubeta ciclo N+1)
+    cycle_queue: list       = field(default_factory=list)   # ciclos normales pendientes o en curso
     last_pkg_sched_t: float = -1.0   # t cuando el último paquete del ciclo está preparado
+    next_cycle_seq: int     = 0
+    active_cycle_id: int    = -1
+    active_cycle_slot: int  = 0
 
     # ── plan del ciclo actual (set en _plan_new_cycle) ───────────
     # Tiempos absolutos de inicio y fin de preparación de cada item.

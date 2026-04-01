@@ -113,7 +113,7 @@ WARMUP_S: float = 300.0           # 5 min de calentamiento
 
 # ── UI / Visual ─────────────────────────────────────────────────
 CANVAS_W: int  = 1560
-CANVAS_H: int  = 960
+CANVAS_H: int  = 1040
 
 # Zona cinta
 BELT_Y: int     = 380                   # Y central de la cinta en píxeles
@@ -189,3 +189,4 @@ SIM_MEAN_CYCLE_S: float = (_SIM_N_TOTAL * 3600.0) / _SIM_CYCLES_H   # ≈ 58.2 s
 # Motor 1 es teórico (antes de M01), los demás son físicos
 MOTOR_POSITIONS_M: list = [-1.000, 7.950, 19.710, 31.610, 43.480]
 MOTOR_SPEEDS_MPM:  list = [22.0, 22.0, 22.0, 22.0, 22.0]   # velocidad de cada motor (m/min)
+BUFFER_PER_STATION_DEFAULT: int = 1                         # cubetas preparables por mesa normal

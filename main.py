@@ -25,6 +25,7 @@ from simtimeind.core.constants import (
     WARMUP_S,
     DT_S,
     MOTOR_SPEEDS_MPM,
+    BUFFER_PER_STATION_DEFAULT,
 )
 from simtimeind.core.engine import Engine
 from simtimeind.core.recorder import save as save_record, load as load_record
@@ -53,6 +54,7 @@ def _engine_default() -> Engine:
         target_totes_h  = TARGET_TOTES_H,
         warmup_s        = WARMUP_S,
         motor_speeds_mpm=list(MOTOR_SPEEDS_MPM),
+        buffer_per_station=BUFFER_PER_STATION_DEFAULT,
     )
 
 
@@ -111,15 +113,18 @@ def _choose_file() -> str | None:
     return path or None
 
 
-def _choose_motor_speeds(default_speeds: list[float] | None = None) -> list[float] | None:
+def _choose_sim_setup(
+    default_speeds: list[float] | None = None,
+    default_buffer: int = BUFFER_PER_STATION_DEFAULT,
+) -> tuple[list[float], int] | None:
     import tkinter as tk
     from tkinter import messagebox
 
     speeds = list(default_speeds or MOTOR_SPEEDS_MPM)
-    result: list[float] | None = None
+    result: tuple[list[float], int] | None = None
 
     root = tk.Tk()
-    root.title("Velocidades de motores")
+    root.title("Configuracion de simulacion")
     root.configure(bg="#1A1D23")
     root.resizable(False, False)
 
@@ -128,7 +133,7 @@ def _choose_motor_speeds(default_speeds: list[float] | None = None) -> list[floa
 
     tk.Label(
         frame,
-        text="Configura la velocidad de cada motor antes de cargar la simulacion",
+        text="Configura motores y buffer por mesa antes de cargar la simulacion",
         bg="#12141A",
         fg="#E8ECF2",
         font=("Helvetica", 11, "bold"),
@@ -136,7 +141,7 @@ def _choose_motor_speeds(default_speeds: list[float] | None = None) -> list[floa
 
     tk.Label(
         frame,
-        text="Valores en m/min",
+        text="Velocidades en m/min y capacidad de buffer por mesa normal",
         bg="#12141A",
         fg="#7A8499",
         font=("Helvetica", 9),
@@ -165,10 +170,36 @@ def _choose_motor_speeds(default_speeds: list[float] | None = None) -> list[floa
             font=("Consolas", 10),
         ).grid(row=idx + 2, column=1, sticky="ew", pady=4)
 
+    buffer_row = len(speeds) + 2
+    tk.Label(
+        frame,
+        text="Buffer por mesa",
+        bg="#12141A",
+        fg="#E8ECF2",
+        font=("Helvetica", 10),
+    ).grid(row=buffer_row, column=0, sticky="w", padx=(0, 12), pady=(12, 4))
+
+    buffer_var = tk.StringVar(value=str(max(1, min(2, int(default_buffer)))))
+    buffer_box = tk.Frame(frame, bg="#12141A")
+    buffer_box.grid(row=buffer_row, column=1, sticky="w", pady=(12, 4))
+    for value in ("1", "2"):
+        tk.Radiobutton(
+            buffer_box,
+            text=value,
+            value=value,
+            variable=buffer_var,
+            bg="#12141A",
+            fg="#E8ECF2",
+            selectcolor="#2A2E38",
+            activebackground="#12141A",
+            activeforeground="#E8ECF2",
+            font=("Helvetica", 10),
+        ).pack(side="left", padx=(0, 12))
+
     frame.grid_columnconfigure(1, weight=1)
 
     btns = tk.Frame(frame, bg="#12141A")
-    btns.grid(row=len(speeds) + 2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+    btns.grid(row=buffer_row + 1, column=0, columnspan=2, sticky="ew", pady=(14, 0))
 
     def _cancel() -> None:
         nonlocal result
@@ -193,7 +224,19 @@ def _choose_motor_speeds(default_speeds: list[float] | None = None) -> list[floa
             )
             return
 
-        result = parsed
+        try:
+            buffer_value = int(buffer_var.get())
+        except ValueError:
+            buffer_value = BUFFER_PER_STATION_DEFAULT
+        if buffer_value not in (1, 2):
+            messagebox.showerror(
+                "Buffer no valido",
+                "El buffer por mesa debe ser 1 o 2 cubetas.",
+                parent=root,
+            )
+            return
+
+        result = (parsed, buffer_value)
         root.destroy()
 
     tk.Button(
@@ -250,12 +293,17 @@ def _menu() -> None:
 
     elif opcion == "1":
         from simtimeind.ui.live_window import LiveWindow
-        speeds = _choose_motor_speeds()
-        if speeds is None:
+        setup = _choose_sim_setup()
+        if setup is None:
             print("  Simulacion cancelada.")
             return
+        speeds, buffer_per_station = setup
         eng = _engine_default()
-        eng = Engine(**{**eng._init_kwargs, "motor_speeds_mpm": speeds})
+        eng = Engine(**{
+            **eng._init_kwargs,
+            "motor_speeds_mpm": speeds,
+            "buffer_per_station": buffer_per_station,
+        })
         LiveWindow(eng, speed=EXE_SPEED, view=EXE_VIEW,
                    record_path=None).run()
 
@@ -329,6 +377,7 @@ def _build_engine_from_args(args) -> Engine:
         target_boxes_h  = getattr(args, "target_boxes_h", TARGET_BOXES_H),
         target_totes_h  = getattr(args, "target_totes_h", TARGET_TOTES_H),
         motor_speeds_mpm=list(getattr(args, "motor_speeds_mpm", MOTOR_SPEEDS_MPM)),
+        buffer_per_station=int(getattr(args, "buffer_per_station", BUFFER_PER_STATION_DEFAULT)),
     )
 
 
@@ -337,11 +386,16 @@ def main() -> None:
     # EXE sin argumentos -> live directo
     if getattr(sys, "frozen", False) and len(sys.argv) == 1:
         from simtimeind.ui.live_window import LiveWindow
-        speeds = _choose_motor_speeds()
-        if speeds is None:
+        setup = _choose_sim_setup()
+        if setup is None:
             return
+        speeds, buffer_per_station = setup
         eng = _engine_default()
-        eng = Engine(**{**eng._init_kwargs, "motor_speeds_mpm": speeds})
+        eng = Engine(**{
+            **eng._init_kwargs,
+            "motor_speeds_mpm": speeds,
+            "buffer_per_station": buffer_per_station,
+        })
         LiveWindow(eng, speed=EXE_SPEED, view=EXE_VIEW,
                    record_path=EXE_RECORD_PATH).run()
         return
@@ -371,6 +425,7 @@ def main() -> None:
     ap.add_argument("--target_total_h", type=float, default=TARGET_TOTAL_H)
     ap.add_argument("--target_boxes_h", type=float, default=TARGET_BOXES_H)
     ap.add_argument("--target_totes_h", type=float, default=TARGET_TOTES_H)
+    ap.add_argument("--buffer_per_station", type=int, choices=[1, 2], default=BUFFER_PER_STATION_DEFAULT)
     ap.add_argument("--record",         type=str,   default=None)
     ap.add_argument("--no_ui",          action="store_true")
     ap.add_argument("--replay",         nargs="?",  const="", default=None)
@@ -391,10 +446,18 @@ def main() -> None:
         _run_batch(eng, args.record)
         return
 
-    speeds = _choose_motor_speeds(list(getattr(args, "motor_speeds_mpm", MOTOR_SPEEDS_MPM)))
-    if speeds is None:
+    setup = _choose_sim_setup(
+        list(getattr(args, "motor_speeds_mpm", MOTOR_SPEEDS_MPM)),
+        int(getattr(args, "buffer_per_station", BUFFER_PER_STATION_DEFAULT)),
+    )
+    if setup is None:
         return
-    eng = Engine(**{**eng._init_kwargs, "motor_speeds_mpm": speeds})
+    speeds, buffer_per_station = setup
+    eng = Engine(**{
+        **eng._init_kwargs,
+        "motor_speeds_mpm": speeds,
+        "buffer_per_station": buffer_per_station,
+    })
 
     from simtimeind.ui.live_window import LiveWindow
     LiveWindow(eng, speed=args.speed, view=args.view,
